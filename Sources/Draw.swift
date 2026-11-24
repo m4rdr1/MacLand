@@ -275,6 +275,126 @@ func drawCalendar(_ ctx: CGContext) {
              alpha: a, rect: l.calStatus2, align: .left, truncate: true)
 }
 
+func drawSymbol(_ ctx: CGContext, _ name: String, _ rect: CGRect, _ color: CGColor, _ alpha: CGFloat,
+                _ weight: NSFont.Weight = .semibold) {
+    if alpha <= 0.003 || rect.width < 2 || rect.height < 2 { return }
+    let conf = NSImage.SymbolConfiguration(pointSize: rect.height, weight: weight)
+        .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor(cgColor: color) ?? NSColor.white]))
+    guard let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(conf) else { return }
+    let sz = img.size
+    guard sz.width > 0, sz.height > 0 else { return }
+    let k = min(rect.width / sz.width, rect.height / sz.height)
+    let r = CGRect(x: rect.midX - sz.width * k * 0.5, y: rect.midY - sz.height * k * 0.5,
+                   width: sz.width * k, height: sz.height * k)
+    let g = NSGraphicsContext(cgContext: ctx, flipped: true)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = g
+    img.draw(in: r, from: NSRect.zero, operation: NSCompositingOperation.sourceOver, fraction: alpha)
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+func drawRing(_ ctx: CGContext, _ c: CGPoint, _ r: CGFloat, _ w: CGFloat, _ frac: CGFloat,
+              _ color: CGColor, _ a: CGFloat, _ track: CGFloat = 0.14) {
+    if a <= 0.003 || r <= 1 { return }
+    let white = rgb(1, 1, 1)
+    ctx.setLineWidth(w)
+    ctx.setLineCap(.round)
+    ctx.setStrokeColor(white.copy(alpha: a * track) ?? white)
+    ctx.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+    ctx.strokePath()
+    let f = clampf(frac, 0, 1)
+    if f > 0.004 {
+        ctx.setStrokeColor(color.copy(alpha: a) ?? color)
+        ctx.beginPath()
+        ctx.addArc(center: c, radius: r, startAngle: -.pi / 2, endAngle: -.pi / 2 + 2 * .pi * f, clockwise: false)
+        ctx.strokePath()
+    }
+}
+
+func drawBrackets(_ ctx: CGContext, _ r: CGRect, _ len: CGFloat, _ w: CGFloat, _ c: CGColor, _ a: CGFloat) {
+    if a <= 0.003 { return }
+    ctx.setStrokeColor(c.copy(alpha: a) ?? c)
+    ctx.setLineWidth(w)
+    ctx.setLineCap(.round)
+    let corners: [[CGPoint]] = [
+        [CGPoint(x: r.minX, y: r.minY + len), CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX + len, y: r.minY)],
+        [CGPoint(x: r.maxX - len, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.minY + len)],
+        [CGPoint(x: r.maxX, y: r.maxY - len), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.maxX - len, y: r.maxY)],
+        [CGPoint(x: r.minX + len, y: r.maxY), CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY - len)]
+    ]
+    for p in corners {
+        ctx.beginPath()
+        ctx.addLines(between: p)
+        ctx.strokePath()
+    }
+}
+
+func batterySymbol(_ pct: Int, _ charging: Bool) -> String {
+    if charging { return "battery.100.bolt" }
+    if pct <= 12 { return "battery.0" }
+    if pct <= 37 { return "battery.25" }
+    if pct <= 62 { return "battery.50" }
+    if pct <= 87 { return "battery.75" }
+    return "battery.100"
+}
+
+func batteryColor(_ pct: Int, _ charging: Bool) -> CGColor {
+    if charging { return rgb(0.32, 0.86, 0.45) }
+    if pct <= 20 { return rgb(0.95, 0.33, 0.28) }
+    if pct <= 40 { return rgb(0.98, 0.74, 0.28) }
+    return rgb(0.38, 0.87, 0.49)
+}
+
+func batterySpan(_ m: Int) -> String {
+    if m >= 60 { return "\(m / 60) h \(m % 60) m" }
+    return "\(m) m"
+}
+
+func batteryHeadline(_ b: BatteryState) -> String {
+    if !b.present { return "Battery Low" }
+    if b.charging { return "Charging" }
+    if b.percent <= 10 { return "Battery Critical" }
+    if b.percent <= 20 { return "Battery Low" }
+    return "Battery"
+}
+
+func batteryDetail(_ b: BatteryState) -> String {
+    if !b.present { return "Turn on Low Power Mode or charge soon." }
+    if b.charging {
+        if b.fullMinutes > 0 { return batterySpan(b.fullMinutes) + " until full" }
+        return "Connected to power"
+    }
+    if b.minutes > 0 { return batterySpan(b.minutes) + " remaining" }
+    if b.percent <= 20 { return "Turn on Low Power Mode or charge soon." }
+    return "On battery power"
+}
+
+func podsPercent(_ s: PodsState) -> Int {
+    if s.left >= 0 && s.right >= 0 { return (s.left + s.right) / 2 }
+    if s.left >= 0 { return s.left }
+    if s.right >= 0 { return s.right }
+    return s.single
+}
+
+func listeningName(_ m: Int) -> String {
+    switch m {
+    case 1: return "Noise Control Off"
+    case 2: return "Noise Cancellation"
+    case 3: return "Transparency"
+    case 4: return "Adaptive"
+    default: return "Noise Control"
+    }
+}
+
+func listeningSymbol(_ m: Int) -> String {
+    switch m {
+    case 2: return "wave.3.right"
+    case 3: return "ear"
+    case 4: return "person.wave.2"
+    default: return "speaker.slash"
+    }
+}
+
 func renderIsland(_ ctx: CGContext, size: CGSize) {
     let I = Island.shared
     ctx.clear(CGRect(origin: .zero, size: size))
@@ -539,6 +659,164 @@ func drawIslandContent(_ ctx: CGContext) {
             fillRounded(ctx, CGRect(x: tr.minX, y: tr.minY, width: max(bh, fw), height: tr.height), bh / 2, white, aVl)
         }
         ctx.restoreGState()
+    }
+
+    let aB = clampf(CGFloat(I.aBat.x), 0, 1)
+    if aB > 0.01 {
+        let pct = I.battery.present ? I.battery.percent : 14
+        let col = batteryColor(pct, I.battery.charging)
+        drawSymbol(ctx, batterySymbol(pct, I.battery.charging), l.batIcon, col, aB)
+        drawText(ctx, I.battery.charging ? "Charging" : "Battery Low", font: sysFont(14.5 * S, .semibold),
+                 color: white, alpha: aB, rect: l.batTitle, truncate: true)
+        drawText(ctx, "\(pct)%", font: sysFont(16 * S, .semibold), color: col, alpha: aB,
+                 rect: l.batPct, align: .right)
+    }
+
+    let aP = clampf(CGFloat(I.aPods.x), 0, 1)
+    if aP > 0.01 {
+        let st = I.pods
+        let name = st.name.isEmpty ? "AirPods" : st.name
+        let dim = rgb(0.52, 0.52, 0.56)
+        drawSymbol(ctx, "airpodspro", l.podIcon, st.connected ? white : dim, aP)
+        drawText(ctx, st.connected ? "Connected" : "Disconnected", font: sysFont(10.5 * S, .semibold),
+                 color: st.connected ? rgb(0.55, 0.86, 0.62) : dim, alpha: aP, rect: l.podLabel, tracking: 0.4)
+        drawText(ctx, name, font: sysFont(14.5 * S, .semibold), color: white,
+                 alpha: aP * (st.connected ? 1 : 0.55), rect: l.podName, truncate: true)
+        let pct = podsPercent(st)
+        if pct >= 0 {
+            drawRing(ctx, l.podRing, l.podRingR, 3 * S, CGFloat(pct) / 100, batteryColor(pct, false), aP, 0.16)
+            drawText(ctx, "\(pct)", font: sysFont(10.5 * S, .semibold), color: white, alpha: aP,
+                     rect: CGRect(x: l.podRing.x - 16 * S, y: l.podRing.y - 8 * S, width: 32 * S, height: 16 * S), align: .center)
+        }
+    }
+
+    let aA = clampf(CGFloat(I.aAuth.x), 0, 1)
+    if aA > 0.01 {
+        let ok = I.authOK
+        let col = I.authRunning ? white : (ok ? rgb(0.35, 0.87, 0.46) : rgb(0.95, 0.35, 0.30))
+        let sym = I.authRunning ? "touchid" : (ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+        drawSymbol(ctx, sym, l.authIcon, col, aA)
+        drawText(ctx, I.authLabel.isEmpty ? "Authenticating" : I.authLabel, font: sysFont(15 * S, .semibold),
+                 color: white, alpha: aA, rect: l.authLabel, truncate: true)
+    }
+
+    let aPm = clampf(CGFloat(I.aPerm.x), 0, 1)
+    if aPm > 0.01 {
+        let col = I.authOK ? rgb(0.35, 0.87, 0.46) : rgb(0.95, 0.35, 0.30)
+        drawSymbol(ctx, "lock.shield", l.authIcon, col, aPm)
+        drawText(ctx, I.authLabel.isEmpty ? "Calendar Access" : I.authLabel, font: sysFont(14.5 * S, .semibold),
+                 color: white, alpha: aPm, rect: l.authLabel, truncate: true)
+    }
+
+    let aC = I.vCard * clampf((t - 0.5) / 0.35, 0, 1)
+    if aC > 0.01 && I.expanded {
+        if I.card == .battery {
+            let st = I.battery
+            let pct = st.present ? st.percent : 14
+            let col = batteryColor(pct, st.charging)
+            drawRing(ctx, l.ringC, l.ringR, 8 * S, CGFloat(pct) / 100, col, aC, 0.13)
+            drawText(ctx, "\(pct)%", font: sysFont(28 * S, .semibold), color: white, alpha: aC,
+                     rect: CGRect(x: l.ringC.x - l.ringR, y: l.ringC.y - 17 * S, width: l.ringR * 2, height: 34 * S), align: .center)
+            if st.charging {
+                drawSymbol(ctx, "bolt.fill", CGRect(x: l.ringC.x - 7 * S, y: l.ringC.y + l.ringR + 5 * S, width: 14 * S, height: 14 * S), col, aC * 0.9)
+            }
+            drawText(ctx, "BATTERY", font: sysFont(10 * S, .semibold), color: rgb(0.62, 0.62, 0.66),
+                     alpha: aC, rect: l.cardKick, tracking: 1.4)
+            drawText(ctx, batteryHeadline(st), font: sysFont(21 * S, .semibold), color: white,
+                     alpha: aC, rect: l.cardTitle, truncate: true)
+            drawText(ctx, batteryDetail(st), font: sysFont(12.5 * S, .regular), color: rgb(0.62, 0.62, 0.66),
+                     alpha: aC, rect: l.cardSub, truncate: true)
+            let chip = l.cardChip
+            fillRounded(ctx, chip, chip.height / 2, white, aC * 0.10)
+            drawSymbol(ctx, "bolt.fill", CGRect(x: chip.minX + 12 * S, y: chip.midY - 7 * S, width: 14 * S, height: 14 * S),
+                       st.lowPower ? col : rgb(0.60, 0.60, 0.64), aC)
+            drawText(ctx, st.lowPower ? "Low Power Mode On" : "Low Power Mode Off", font: sysFont(11.5 * S, .semibold),
+                     color: white, alpha: aC * 0.85,
+                     rect: CGRect(x: chip.minX + 32 * S, y: chip.minY, width: chip.width - 42 * S, height: chip.height), truncate: true)
+            drawText(ctx, "Open Battery Settings", font: sysFont(11.5 * S, .medium), color: white,
+                     alpha: aC * 0.45, rect: l.cardHint)
+        }
+
+        if I.card == .pods {
+            let st = I.pods
+            let name = st.name.isEmpty ? "AirPods" : st.name
+            let on = st.connected
+            drawSymbol(ctx, "airpodspro", l.podIconBig, white, aC * (on ? 1 : 0.35))
+            drawText(ctx, on ? "CONNECTED" : "DISCONNECTED", font: sysFont(10 * S, .semibold),
+                     color: on ? rgb(0.45, 0.86, 0.55) : rgb(0.55, 0.55, 0.58), alpha: aC,
+                     rect: l.podCardKick, tracking: 1.3)
+            drawText(ctx, name, font: sysFont(19 * S, .semibold), color: white,
+                     alpha: aC * (on ? 1 : 0.5), rect: l.podCardName, truncate: true)
+            if on && st.listening > 0 {
+                let chip = l.podModeChip
+                fillRounded(ctx, chip, chip.height / 2, white, aC * 0.10)
+                drawSymbol(ctx, listeningSymbol(st.listening),
+                           CGRect(x: chip.minX + 10 * S, y: chip.midY - 7 * S, width: 14 * S, height: 14 * S), white, aC * 0.9)
+                drawText(ctx, listeningName(st.listening), font: sysFont(11 * S, .semibold), color: white,
+                         alpha: aC * 0.9,
+                         rect: CGRect(x: chip.minX + 30 * S, y: chip.minY, width: chip.width - 38 * S, height: chip.height),
+                         truncate: true)
+            } else {
+                drawText(ctx, on ? "Noise control unavailable" : "Connect to see battery",
+                         font: sysFont(11 * S, .regular), color: white, alpha: aC * 0.45, rect: l.podModeChip)
+            }
+            let rows: [(String, Int)] = [("L", st.left), ("R", st.right), ("Case", st.caseLevel)]
+            let cL = l.cardL
+            let cT = l.cardT
+            var y = cT + 46 * S
+            var any = false
+            for (label, value) in rows where value >= 0 {
+                any = true
+                drawText(ctx, label, font: sysFont(11 * S, .semibold), color: rgb(0.62, 0.62, 0.66), alpha: aC,
+                         rect: CGRect(x: cL + 196 * S, y: y, width: 30 * S, height: 16 * S))
+                let br = CGRect(x: cL + 228 * S, y: y + 6 * S, width: 74 * S, height: 5 * S)
+                fillRounded(ctx, br, br.height / 2, white, aC * 0.16)
+                fillRounded(ctx, CGRect(x: br.minX, y: br.minY, width: max(br.height, br.width * CGFloat(value) / 100), height: br.height),
+                            br.height / 2, batteryColor(value, false), aC * 0.95)
+                drawText(ctx, "\(value)%", font: sysFont(11 * S, .semibold), color: white, alpha: aC * 0.9,
+                         rect: CGRect(x: cL + 308 * S, y: y, width: 44 * S, height: 16 * S), align: .right)
+                y += 30 * S
+            }
+            if !any && on {
+                drawText(ctx, "Battery levels unavailable", font: sysFont(11 * S, .regular), color: rgb(0.55, 0.55, 0.58),
+                         alpha: aC, rect: CGRect(x: cL + 196 * S, y: cT + 48 * S, width: 156 * S, height: 16 * S), truncate: true)
+            }
+            drawText(ctx, on ? "Click mode to cycle" : "Open Bluetooth Settings",
+                     font: sysFont(11 * S, .medium), color: white, alpha: aC * 0.42, rect: l.podHint, truncate: true)
+        }
+
+        if I.card == .auth || I.card == .permission {
+            let perm = I.card == .permission
+            let ok = I.authOK
+            let running = I.authRunning
+            let col = running ? white : (ok ? rgb(0.35, 0.87, 0.46) : rgb(0.95, 0.35, 0.30))
+            let phase = max(0, CGFloat(I.time - I.authStart))
+            if running {
+                for i in 0..<2 {
+                    let p = (phase * 0.9 + CGFloat(i) * 0.5).truncatingRemainder(dividingBy: 1)
+                    let rr = l.authBig.width * 0.62 + p * 32 * S
+                    ctx.setStrokeColor(col.copy(alpha: aC * 0.22 * (1 - p)) ?? col)
+                    ctx.setLineWidth(1.5 * S)
+                    ctx.addEllipse(in: CGRect(x: l.authBig.midX - rr, y: l.authBig.midY - rr, width: rr * 2, height: rr * 2))
+                    ctx.strokePath()
+                }
+            }
+            let br = l.authBig.insetBy(dx: -12 * S, dy: -12 * S)
+            drawBrackets(ctx, br, 10 * S, 2.5 * S, col, aC * (running ? 0.9 : 0.4))
+            let sym = perm ? "lock.shield" : (running ? "touchid" : (ok ? "checkmark.circle.fill" : "xmark.circle.fill"))
+            drawSymbol(ctx, sym, l.authBig, col, aC, .regular)
+            if running {
+                let yy = br.minY + br.height * (0.5 + 0.45 * sin(phase * 2.6))
+                fillRounded(ctx, CGRect(x: br.minX + 6 * S, y: yy, width: br.width - 12 * S, height: 2 * S), 1 * S, col, aC * 0.55)
+            }
+            let title = perm ? I.authLabel : (running ? "Authenticating" : I.authLabel)
+            drawText(ctx, title.isEmpty ? "Authenticating" : title, font: sysFont(19 * S, .semibold), color: white,
+                     alpha: aC, rect: l.authTitle, align: .center, truncate: true)
+            let sub = perm ? (ok ? "MacLand can show your calendar" : "Enable it in Privacy & Security")
+                           : (running ? "Touch ID" : (ok ? "It's you" : "Try again"))
+            drawText(ctx, sub, font: sysFont(12 * S, .regular), color: white, alpha: aC * 0.5,
+                     rect: l.authSub, align: .center)
+        }
     }
 
     drawCalendar(ctx)
