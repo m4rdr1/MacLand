@@ -1,899 +1,823 @@
 import AppKit
-import ImageIO
+import CoreImage
+import CoreText
 
-func clampf(_ v: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat { return v < a ? a : (v > b ? b : v) }
-func lerpf(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { return a + (b - a) * t }
-func rubber(_ x: CGFloat, _ d: CGFloat) -> CGFloat { return (1 - 1 / ((x * 0.55 / d) + 1)) * d }
+let gColorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+private let gCIContext = CIContext(options: nil)
 
-enum Mode { case idle, compact, alert, expanded }
-enum Hit { case none, body, seek, prev, play, next, vol, srch, spot, yt, field, podmode, settings }
-enum AlertKind: Int { case ring = 0, silent = 1, volume = 2, battery = 3, pods = 4, auth = 5, permission = 6 }
-
-struct Lay {
-    var art = CGRect.zero
-    var artR: CGFloat = 0
-    var wx: CGFloat = 0
-    var wy: CGFloat = 0
-    var wsz: CGFloat = 1
-    var title = CGRect.zero
-    var artist = CGRect.zero
-    var tEl = CGRect.zero
-    var tRem = CGRect.zero
-    var bar = CGRect.zero
-    var prev = CGPoint.zero
-    var play = CGPoint.zero
-    var next = CGPoint.zero
-    var vol = CGPoint.zero
-    var srch = CGPoint.zero
-    var field = CGRect.zero
-    var bSpot = CGRect.zero
-    var bYt = CGRect.zero
-    var hint = CGRect.zero
-    var capsule = CGRect.zero
-    var alertText = CGRect.zero
-    var ringX: CGFloat = 0
-    var ringY: CGFloat = 0
-    var capX: CGFloat = 0
-    var capY: CGFloat = 0
-    var calWeek = CGRect.zero
-    var calDay = CGRect.zero
-    var calNext = CGRect.zero
-    var calStatus1 = CGRect.zero
-    var calStatus2 = CGRect.zero
-    var batIcon = CGRect.zero
-    var batTitle = CGRect.zero
-    var batPct = CGRect.zero
-    var podIcon = CGRect.zero
-    var podLabel = CGRect.zero
-    var podName = CGRect.zero
-    var podRing = CGPoint.zero
-    var podRingR: CGFloat = 15
-    var authIcon = CGRect.zero
-    var authLabel = CGRect.zero
-    var ringC = CGPoint.zero
-    var ringR: CGFloat = 40
-    var cardKick = CGRect.zero
-    var cardTitle = CGRect.zero
-    var cardSub = CGRect.zero
-    var cardChip = CGRect.zero
-    var cardHint = CGRect.zero
-    var podIconBig = CGRect.zero
-    var podCardKick = CGRect.zero
-    var podCardName = CGRect.zero
-    var podModeChip = CGRect.zero
-    var podHint = CGRect.zero
-    var authBig = CGRect.zero
-    var authTitle = CGRect.zero
-    var authSub = CGRect.zero
-    var cardL: CGFloat = 0
-    var cardT: CGFloat = 0
+func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
+    return CGColor(colorSpace: gColorSpace, components: [r, g, b, a]) ?? CGColor(gray: 0, alpha: a)
 }
 
-func ComputeLayout(cL: CGFloat, cT: CGFloat, cR: CGFloat, cB: CGFloat, tRaw: CGFloat) -> Lay {
+func fillRounded(_ ctx: CGContext, _ r: CGRect, _ rad: CGFloat, _ c: CGColor, _ a: CGFloat) {
+    if a <= 0.003 || r.width <= 0 || r.height <= 0 { return }
+    ctx.setFillColor(c.copy(alpha: a) ?? c)
+    ctx.addPath(CGPath(roundedRect: r, cornerWidth: rad, cornerHeight: rad, transform: nil))
+    ctx.fillPath()
+}
+
+func sysFont(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+    return NSFont.systemFont(ofSize: size, weight: weight)
+}
+
+enum Align { case left, center, right }
+
+func attributedText(_ s: String, _ f: NSFont, _ c: CGColor, _ tracking: CGFloat) -> NSAttributedString {
+    var attrs: [NSAttributedString.Key: Any] = [
+        .font: f,
+        .foregroundColor: NSColor(cgColor: c) ?? NSColor.white
+    ]
+    if tracking != 0 { attrs[.kern] = tracking }
+    return NSAttributedString(string: s, attributes: attrs)
+}
+
+func metricWidth(_ line: CTLine) -> CGFloat {
+    return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) + CGFloat(CTLineGetTrailingWhitespaceWidth(line))
+}
+
+func textWidth(_ s: String, _ f: NSFont, _ tracking: CGFloat = 0) -> CGFloat {
+    if s.isEmpty { return 0 }
+    return metricWidth(CTLineCreateWithAttributedString(attributedText(s, f, rgb(1, 1, 1), tracking)))
+}
+
+func drawText(_ ctx: CGContext, _ s: String, font f: NSFont, color: CGColor, alpha: CGFloat,
+              rect: CGRect, align: Align = .left, tracking: CGFloat = 0, truncate: Bool = false) {
+    if alpha <= 0.003 || s.isEmpty || rect.width <= 1 { return }
+    let col = color.copy(alpha: alpha) ?? color
+    var line = CTLineCreateWithAttributedString(attributedText(s, f, col, tracking))
+    var w = metricWidth(line)
+    if truncate && w > rect.width {
+        let ell = CTLineCreateWithAttributedString(attributedText("…", f, col, tracking))
+        if let t = CTLineCreateTruncatedLine(line, Double(rect.width), .end, ell) {
+            line = t
+            w = metricWidth(line)
+        }
+    }
+    var x = rect.minX
+    if align == .center { x = rect.midX - w * 0.5 }
+    if align == .right { x = rect.maxX - w }
+    var ascent: CGFloat = 0
+    var descent: CGFloat = 0
+    var leading: CGFloat = 0
+    _ = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+    let baseline = rect.midY + (ascent - descent) * 0.5
+    ctx.saveGState()
+    ctx.translateBy(x: x, y: baseline)
+    ctx.scaleBy(x: 1, y: -1)
+    ctx.textMatrix = .identity
+    ctx.textPosition = .zero
+    CTLineDraw(line, ctx)
+    ctx.restoreGState()
+}
+
+func fmtTime(_ s: Double) -> String {
+    let t = Int(max(0, s))
+    if t >= 3600 {
+        return String(format: "%d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60)
+    }
+    return String(format: "%d:%02d", t / 60, t % 60)
+}
+
+let gBellPath: CGPath = {
+    let p = CGMutablePath()
+    p.move(to: CGPoint(x: -0.55, y: 0.30))
+    p.addCurve(to: CGPoint(x: -0.32, y: -0.12), control1: CGPoint(x: -0.35, y: 0.22), control2: CGPoint(x: -0.32, y: 0.05))
+    p.addCurve(to: CGPoint(x: 0, y: -0.55), control1: CGPoint(x: -0.32, y: -0.42), control2: CGPoint(x: -0.15, y: -0.55))
+    p.addCurve(to: CGPoint(x: 0.32, y: -0.12), control1: CGPoint(x: 0.15, y: -0.55), control2: CGPoint(x: 0.32, y: -0.42))
+    p.addCurve(to: CGPoint(x: 0.55, y: 0.30), control1: CGPoint(x: 0.32, y: 0.05), control2: CGPoint(x: 0.35, y: 0.22))
+    p.closeSubpath()
+    return p
+}()
+
+func drawBell(_ ctx: CGContext, cx: CGFloat, cy: CGFloat, scale s: CGFloat, color: CGColor,
+              alpha a: CGFloat, slash: CGFloat, bg: CGColor, ang: CGFloat) {
+    if a <= 0.003 { return }
+    ctx.saveGState()
+    ctx.translateBy(x: cx, y: cy)
+    ctx.scaleBy(x: s, y: s)
+    ctx.translateBy(x: 0, y: -0.6)
+    ctx.rotate(by: ang * .pi / 180)
+    ctx.translateBy(x: 0, y: 0.6)
+    ctx.setFillColor(color.copy(alpha: a) ?? color)
+    ctx.addPath(gBellPath)
+    ctx.fillPath()
+    ctx.fillEllipse(in: CGRect(x: -0.15, y: 0.33, width: 0.30, height: 0.20))
+    ctx.fillEllipse(in: CGRect(x: -0.07, y: -0.67, width: 0.14, height: 0.14))
+    if slash > 0.01 {
+        let ex = lerpf(-0.62, 0.62, slash)
+        let ey = lerpf(-0.55, 0.55, slash)
+        ctx.setStrokeColor(bg.copy(alpha: a) ?? bg)
+        ctx.setLineWidth(0.34)
+        ctx.setLineCap(.round)
+        ctx.beginPath()
+        ctx.move(to: CGPoint(x: -0.62, y: -0.55))
+        ctx.addLine(to: CGPoint(x: ex, y: ey))
+        ctx.strokePath()
+        ctx.setStrokeColor(color.copy(alpha: a) ?? color)
+        ctx.setLineWidth(0.13)
+        ctx.beginPath()
+        ctx.move(to: CGPoint(x: -0.62, y: -0.55))
+        ctx.addLine(to: CGPoint(x: ex, y: ey))
+        ctx.strokePath()
+    }
+    ctx.restoreGState()
+}
+
+func drawSpeaker(_ ctx: CGContext, cx: CGFloat, cy: CGFloat, alpha a: CGFloat, k: CGFloat) {
+    if a <= 0.003 { return }
+    let S = k
+    let white = rgb(1, 1, 1)
+    let pts = [
+        CGPoint(x: cx - 7 * S, y: cy - 3 * S),
+        CGPoint(x: cx - 3.5 * S, y: cy - 3 * S),
+        CGPoint(x: cx + 1 * S, y: cy - 7 * S),
+        CGPoint(x: cx + 1 * S, y: cy + 7 * S),
+        CGPoint(x: cx - 3.5 * S, y: cy + 3 * S),
+        CGPoint(x: cx - 7 * S, y: cy + 3 * S)
+    ]
+    ctx.setFillColor(white.copy(alpha: a) ?? white)
+    ctx.beginPath()
+    ctx.addLines(between: pts)
+    ctx.closePath()
+    ctx.fillPath()
+
+    for i in 0..<3 {
+        let w = clampf(Island.shared.waveAmt[i], 0, 1)
+        if w < 0.01 { continue }
+        let sweep = 90 * lerpf(0.45, 1.0, w) * .pi / 180
+        let r = (5 + CGFloat(i) * 4) * S * lerpf(0.7, 1.0, w)
+        ctx.setStrokeColor(white.copy(alpha: a * w) ?? white)
+        ctx.setLineWidth(1.8 * S)
+        ctx.setLineCap(.round)
+        ctx.beginPath()
+        ctx.addArc(center: CGPoint(x: cx + 1 * S, y: cy), radius: r,
+                   startAngle: -sweep / 2, endAngle: sweep / 2, clockwise: false)
+        ctx.strokePath()
+    }
+
+    let m = clampf(Island.shared.muteAmt, 0, 1)
+    if m > 0.01 {
+        ctx.setStrokeColor(white.copy(alpha: a) ?? white)
+        ctx.setLineWidth(2 * S)
+        ctx.setLineCap(.round)
+        let p1a = CGPoint(x: cx + 4 * S, y: cy - 4 * S)
+        let p1b = CGPoint(x: lerpf(cx + 4 * S, cx + 12 * S, m), y: lerpf(cy - 4 * S, cy + 4 * S, m))
+        let p2a = CGPoint(x: cx + 12 * S, y: cy - 4 * S)
+        let p2b = CGPoint(x: lerpf(cx + 12 * S, cx + 4 * S, m), y: lerpf(cy - 4 * S, cy + 4 * S, m))
+        ctx.beginPath()
+        ctx.move(to: p1a)
+        ctx.addLine(to: p1b)
+        ctx.strokePath()
+        ctx.beginPath()
+        ctx.move(to: p2a)
+        ctx.addLine(to: p2b)
+        ctx.strokePath()
+    }
+}
+
+func drawChevrons(_ ctx: CGContext, _ cx: CGFloat, _ cy: CGFloat, _ dir: Int, _ color: CGColor, _ a: CGFloat) {
+    if a <= 0.003 { return }
     let S: CGFloat = 1
-    let t = clampf(tRaw, 0, 1.12)
-    var l = Lay()
-    let pad = 26 * S
-    let cx = (cL + cR) * 0.5
-    let asz = lerpf(22 * S, 56 * S, t)
-    let ax = lerpf(cL + 9 * S, cL + pad, t)
-    let ay = lerpf(cT + 7.5 * S, cT + pad, t)
-    l.art = CGRect(x: ax, y: ay, width: asz, height: asz)
-    l.artR = lerpf(5 * S, 11 * S, t)
-    l.wx = lerpf(cR - 18 * S, cR - 42 * S, t)
-    l.wy = lerpf(cT + 18.5 * S, cT + 46 * S, t)
-    l.wsz = lerpf(0.85, 1.25, t)
-    let tx = cL + pad + 56 * S + 14 * S
-    let tw = (cR - 42 * S - 20 * S) - tx
-    l.title = CGRect(x: tx, y: cT + 32 * S, width: tw, height: 24 * S)
-    l.artist = CGRect(x: tx, y: cT + 55 * S, width: tw, height: 22 * S)
-    let py = cT + 117 * S
-    l.tEl = CGRect(x: cL + pad, y: py - 10 * S, width: 44 * S, height: 20 * S)
-    l.tRem = CGRect(x: cR - pad - 48 * S, y: py - 10 * S, width: 48 * S, height: 20 * S)
-    l.bar = CGRect(x: cL + pad + 46 * S, y: py - 3 * S, width: (cR - pad - 52 * S) - (cL + pad + 46 * S), height: 6 * S)
-    let cy = cT + 156 * S
-    l.prev = CGPoint(x: cx - 70 * S, y: cy)
-    l.play = CGPoint(x: cx, y: cy)
-    l.next = CGPoint(x: cx + 70 * S, y: cy)
-    l.vol = CGPoint(x: cR - 50 * S, y: cy)
-    l.srch = CGPoint(x: cL + 50 * S, y: cy)
-    l.field = CGRect(x: cL + pad, y: cT + 26 * S, width: (cR - pad) - (cL + pad), height: 44 * S)
-    l.bSpot = CGRect(x: cL + pad, y: cT + 86 * S, width: (cx - 6 * S) - (cL + pad), height: 40 * S)
-    l.bYt = CGRect(x: cx + 6 * S, y: cT + 86 * S, width: (cR - pad) - (cx + 6 * S), height: 40 * S)
-    l.hint = CGRect(x: cL + pad, y: cT + 140 * S, width: (cR - pad) - (cL + pad), height: 24 * S)
-    l.capsule = CGRect(x: cL + 8 * S, y: cT + 5.5 * S, width: 50 * S, height: 26 * S)
-    l.capX = l.capsule.midX
-    l.capY = cT + 18.5 * S
-    l.ringX = cL + 24 * S
-    l.ringY = cT + 18.5 * S
-    l.alertText = CGRect(x: cL + 62 * S, y: cT, width: (cR - 20 * S) - (cL + 62 * S), height: 37 * S)
-
-    l.calWeek = CGRect(x: cL + 22 * S, y: cT + 17 * S, width: 168 * S, height: 14 * S)
-    l.calDay = CGRect(x: cL + 20 * S, y: cT + 31 * S, width: 160 * S, height: 56 * S)
-    l.calNext = CGRect(x: cL + 196 * S, y: cT + 17 * S, width: (cR - 22 * S) - (cL + 196 * S), height: 14 * S)
-    l.calStatus1 = CGRect(x: cL + 22 * S, y: cT + 96 * S, width: (cR - 22 * S) - (cL + 22 * S), height: 16 * S)
-    l.calStatus2 = CGRect(x: cL + 22 * S, y: cT + 112 * S, width: (cR - 22 * S) - (cL + 22 * S), height: 16 * S)
-
-    l.batIcon = CGRect(x: cL + 18 * S, y: cT + 9 * S, width: 26 * S, height: 19 * S)
-    l.batTitle = CGRect(x: cL + 52 * S, y: cT + 2 * S, width: 112 * S, height: 33 * S)
-    l.batPct = CGRect(x: cR - 74 * S, y: cT + 2 * S, width: 58 * S, height: 33 * S)
-    l.podIcon = CGRect(x: cL + 14 * S, y: cT + 7 * S, width: 26 * S, height: 23 * S)
-    l.podLabel = CGRect(x: cL + 48 * S, y: cT + 3 * S, width: (cR - 74 * S) - (cL + 48 * S), height: 14 * S)
-    l.podName = CGRect(x: cL + 48 * S, y: cT + 15 * S, width: (cR - 74 * S) - (cL + 48 * S), height: 20 * S)
-    l.podRing = CGPoint(x: cR - 36 * S, y: l.ringY)
-    l.podRingR = 15 * S
-    l.authIcon = CGRect(x: cL + 18 * S, y: cT + 8.5 * S, width: 21 * S, height: 21 * S)
-    l.authLabel = CGRect(x: cL + 48 * S, y: cT, width: (cR - 16 * S) - (cL + 48 * S), height: 37 * S)
-
-    l.cardL = cL
-    l.cardT = cT
-    l.ringC = CGPoint(x: cL + 92 * S, y: cT + 100 * S)
-    l.ringR = 40 * S
-    l.cardKick = CGRect(x: cL + 172 * S, y: cT + 30 * S, width: (cR - 26 * S) - (cL + 172 * S), height: 14 * S)
-    l.cardTitle = CGRect(x: cL + 172 * S, y: cT + 44 * S, width: (cR - 26 * S) - (cL + 172 * S), height: 28 * S)
-    l.cardSub = CGRect(x: cL + 172 * S, y: cT + 74 * S, width: (cR - 24 * S) - (cL + 172 * S), height: 18 * S)
-    l.cardChip = CGRect(x: cL + 172 * S, y: cT + 102 * S, width: 164 * S, height: 30 * S)
-    l.cardHint = CGRect(x: cL + 172 * S, y: cT + 148 * S, width: (cR - 24 * S) - (cL + 172 * S), height: 18 * S)
-    l.podIconBig = CGRect(x: cL + 34 * S, y: cT + 34 * S, width: 54 * S, height: 46 * S)
-    l.podCardKick = CGRect(x: cL + 24 * S, y: cT + 88 * S, width: 150 * S, height: 14 * S)
-    l.podCardName = CGRect(x: cL + 24 * S, y: cT + 102 * S, width: 148 * S, height: 28 * S)
-    l.podModeChip = CGRect(x: cL + 24 * S, y: cT + 136 * S, width: 152 * S, height: 26 * S)
-    l.podHint = CGRect(x: cL + 24 * S, y: cT + 166 * S, width: 150 * S, height: 16 * S)
-    l.authBig = CGRect(x: cx - 34 * S, y: cT + 30 * S, width: 68 * S, height: 68 * S)
-    l.authTitle = CGRect(x: cL + 20 * S, y: cT + 118 * S, width: (cR - 20 * S) - (cL + 20 * S), height: 26 * S)
-    l.authSub = CGRect(x: cL + 20 * S, y: cT + 146 * S, width: (cR - 20 * S) - (cL + 20 * S), height: 18 * S)
-    return l
+    let w = 13 * S
+    let h = 20 * S
+    for i in 0..<2 {
+        let xl = cx - w + CGFloat(i) * w
+        let xr = xl + w
+        let pts: [CGPoint]
+        if dir < 0 {
+            pts = [CGPoint(x: xr, y: cy - h / 2), CGPoint(x: xl, y: cy), CGPoint(x: xr, y: cy + h / 2)]
+        } else {
+            pts = [CGPoint(x: xl, y: cy - h / 2), CGPoint(x: xr, y: cy), CGPoint(x: xl, y: cy + h / 2)]
+        }
+        ctx.setFillColor(color.copy(alpha: a) ?? color)
+        ctx.setStrokeColor(color.copy(alpha: a) ?? color)
+        ctx.setLineWidth(3 * S)
+        ctx.setLineJoin(.round)
+        ctx.beginPath()
+        ctx.addLines(between: pts)
+        ctx.closePath()
+        ctx.drawPath(using: .fillStroke)
+    }
 }
 
-final class Island {
-    static let shared = Island()
+func drawSearchIcon(_ ctx: CGContext, _ cx: CGFloat, _ cy: CGFloat, _ color: CGColor, _ a: CGFloat) {
+    if a <= 0.003 { return }
+    let S: CGFloat = 1
+    ctx.setStrokeColor(color.copy(alpha: a) ?? color)
+    ctx.setLineWidth(2.3 * S)
+    ctx.setLineCap(.round)
+    ctx.beginPath()
+    ctx.addEllipse(in: CGRect(x: cx - 2 * S - 7 * S, y: cy - 2 * S - 7 * S, width: 14 * S, height: 14 * S))
+    ctx.strokePath()
+    ctx.setLineWidth(2.6 * S)
+    ctx.beginPath()
+    ctx.move(to: CGPoint(x: cx + 3.2 * S, y: cy + 3.2 * S))
+    ctx.addLine(to: CGPoint(x: cx + 9 * S, y: cy + 9 * S))
+    ctx.strokePath()
+}
 
-    var S: CGFloat = 1
-    var canvas = CGSize(width: 720, height: 460)
-    var topInset: CGFloat = 20
-    var pointer = CGPoint(x: -9999, y: -9999)
+func drawStar(_ ctx: CGContext, _ center: CGPoint, _ r: CGFloat, _ color: CGColor, _ a: CGFloat) {
+    if a <= 0.003 { return }
+    let p = CGMutablePath()
+    for i in 0..<10 {
+        let ang = -CGFloat.pi / 2 + CGFloat(i) * .pi / 5
+        let rr = i % 2 == 0 ? r : r * 0.45
+        let pt = CGPoint(x: center.x + rr * cos(ang), y: center.y + rr * sin(ang))
+        if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+    }
+    p.closeSubpath()
+    ctx.setFillColor(color.copy(alpha: a) ?? color)
+    ctx.addPath(p)
+    ctx.fillPath()
+}
 
-    var time: Double = 0
-    var mode: Mode = .idle
-    var expanded = false
-    var searchMode = false
-    var query = ""
-    var searchActive: (Bool) -> Void = { _ in }
+func drawCalendar(_ ctx: CGContext) {
+    let I = Island.shared
+    let l = I.lay
+    let t = clampf(CGFloat(I.ex.x), 0, 1)
+    let a = I.vCal * clampf((t - 0.48) / 0.4, 0, 1)
+    if a <= 0.003 { return }
 
-    var lastActive: Double = 0
-    var leaveTimer: Double = 0
-    var hoverT: Double = 0
-    var topmostTimer: Double = 0
-    var alertStart: Double = -10
-    var alertUntil: Double = -10
-    var alertKind: AlertKind = .ring
+    let info = CalendarService.shared.info
+    let S = I.S
+    let white = rgb(1, 1, 1)
 
-    var sw = Spring()
-    var sh = Spring()
-    var ex = Spring()
-    var sL = Spring()
-    var sR = Spring()
-    var sB = Spring()
-    var press = Spring()
-    var aRing = Spring()
-    var aSilent = Spring()
-    var aVolS = Spring()
-    var bellSlide = Spring()
-    var slashT = Spring()
+    drawText(ctx, info.weekday, font: sysFont(11 * S, .semibold), color: rgb(0.86, 0.42, 0.46),
+             alpha: a, rect: l.calWeek, align: .left, tracking: 1.4)
+    drawText(ctx, info.day, font: sysFont(45 * S, .regular), color: white,
+             alpha: a * 0.98, rect: l.calDay, align: .left)
 
-    var vMedia: CGFloat = 0
-    var vText: CGFloat = 0
-    var vSearch: CGFloat = 0
-    var vAlert: CGFloat = 0
-    var vCal: CGFloat = 0
-    var playT: CGFloat = 0
-    var artFade: CGFloat = 1
-    var waveTime: CGFloat = 0
-    var barGrow: CGFloat = 0
-    var volShown: CGFloat = 0.5
-    var waveAmt: [CGFloat] = [1, 1, 0]
-    var muteAmt: CGFloat = 0
-    var aBat = Spring()
-    var aPods = Spring()
-    var aAuth = Spring()
-    var aPerm = Spring()
-    var vCard: CGFloat = 0
-    var card: AlertKind? = nil
-    var battery = BatteryState()
-    var pods = PodsState()
-    var authOK = false
-    var authRunning = false
-    var authLabel = ""
-    var authStart: Double = -10
-    var batteryThreshold = 100
-    var silentState = false
-    var silentKnown = false
-    var glowW: CGFloat = 0
-    var glowR: CGFloat = 0
+    if info.hasNext && !info.nextTitle.isEmpty {
+        drawText(ctx, info.nextLabel, font: sysFont(10.5 * S, .semibold), color: rgb(0.60, 0.60, 0.64),
+                 alpha: a, rect: l.calNext, align: .left, tracking: 1.2)
 
-    var isl = CGRect.zero
-    var radius: CGFloat = 0
-    var blur: CGFloat = 0
-    private var pL: CGFloat = 0
-    private var pR: CGFloat = 0
-    private var pB: CGFloat = 0
-    private var firstFrame = true
-    var sx: CGFloat = 1
-    var sy: CGFloat = 1
-    var tx: CGFloat = 0
-    var ty: CGFloat = 0
-    var xf = CGAffineTransform.identity
-    var lay = Lay()
+        let pf = sysFont(13.5 * S, .semibold)
+        let textW = textWidth(info.nextTitle, pf, 0.2)
+        let h: CGFloat = 18 * S
+        let inset: CGFloat = 2.5 * S
+        let pillW = min(textW + h + 36 * S, l.calNext.width)
+        let pill = CGRect(x: l.calNext.minX, y: l.calNext.maxY + 1 * S, width: pillW, height: h)
 
-    var down = false
-    var dragging = false
-    var seeking = false
-    var moved = false
-    var pressedHit: Hit = .none
-    var startPt = CGPoint.zero
-    var seekFrac: CGFloat = 0
-    var seekHoldUntil: Double = 0
-    var seekPos: Double = 0
-    var overridePlay = false
-    var overridePlayMin: Double = 0
-    var overridePlayUntil: Double = 0
-    var playingNow = false
-    var volHoldUntil: Double = 0
-    var lastVolRemote: Float = -1
-
-    var has = false
-    var mPlaying = false
-    var title = ""
-    var artist = ""
-    var pos: Double = 0
-    var dur: Double = 0
-    var stamp = Date()
-    var seenTrack = 0
-    var seenThumb = 0
-    var artImage: CGImage?
-    var artColor: (CGFloat, CGFloat, CGFloat) = (1, 1, 1)
-    var animating = true
-
-    init() {
-        sw.cfg(0.28, 0.86)
-        sh.cfg(0.28, 0.86)
-        ex.cfg(0.28, 0.86)
-        sL.cfg(0.5, 0.42)
-        sR.cfg(0.5, 0.42)
-        sB.cfg(0.5, 0.42)
-        press.cfg(0.18, 0.8)
-        aRing.cfg(0.36, 0.62)
-        aSilent.cfg(0.36, 0.62)
-        aVolS.cfg(0.34, 0.7)
-        bellSlide.cfg(0.42, 0.8)
-        slashT.cfg(0.357, 0.9)
-        aBat.cfg(0.30, 0.80)
-        aPods.cfg(0.30, 0.80)
-        aAuth.cfg(0.30, 0.80)
-        aPerm.cfg(0.30, 0.80)
+        fillRounded(ctx, pill, h / 2, rgb(0.36, 0.12, 0.44), a * 0.55)
+        let d = h - 2 * inset
+        let circ = CGRect(x: pill.minX + inset, y: pill.minY + inset, width: d, height: d)
+        ctx.setFillColor(rgb(0.83, 0.18, 0.87).copy(alpha: a) ?? rgb(0.83, 0.18, 0.87))
+        ctx.fillEllipse(in: circ)
+        drawStar(ctx, CGPoint(x: circ.midX, y: circ.midY), d * 0.32, rgb(0.17, 0.04, 0.23), a)
+        drawText(ctx, info.nextTitle, font: pf, color: rgb(0.88, 0.70, 0.96), alpha: a,
+                 rect: CGRect(x: circ.maxX + 5 * S, y: pill.minY, width: max(0, pill.maxX - circ.maxX - 9 * S), height: h),
+                 align: .left, tracking: 0.2, truncate: true)
     }
 
-    func bootstrap() {
-        applyMode(.idle)
-        sw.snap(sw.target)
-        sh.snap(sh.target)
-        ex.snap(0)
-        sL.snap(0)
-        sR.snap(0)
-        sB.snap(0)
-        aBat.snap(0)
-        aPods.snap(0)
-        aAuth.snap(0)
-        aPerm.snap(0)
-        pointer = CGPoint(x: -9999, y: -9999)
-        update(0.016)
+    drawText(ctx, info.status1, font: sysFont(13.5 * S, .semibold), color: rgb(0.62, 0.62, 0.66),
+             alpha: a, rect: l.calStatus1, align: .left, truncate: true)
+    drawText(ctx, info.status2, font: sysFont(12.5 * S, .regular), color: rgb(0.45, 0.45, 0.49),
+             alpha: a, rect: l.calStatus2, align: .left, truncate: true)
+}
+
+func drawSymbol(_ ctx: CGContext, _ name: String, _ rect: CGRect, _ color: CGColor, _ alpha: CGFloat,
+                _ weight: NSFont.Weight = .semibold) {
+    if alpha <= 0.003 || rect.width < 2 || rect.height < 2 { return }
+    let conf = NSImage.SymbolConfiguration(pointSize: rect.height, weight: weight)
+        .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor(cgColor: color) ?? NSColor.white]))
+    guard let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(conf) else { return }
+    let sz = img.size
+    guard sz.width > 0, sz.height > 0 else { return }
+    let k = min(rect.width / sz.width, rect.height / sz.height)
+    let r = CGRect(x: rect.midX - sz.width * k * 0.5, y: rect.midY - sz.height * k * 0.5,
+                   width: sz.width * k, height: sz.height * k)
+    let g = NSGraphicsContext(cgContext: ctx, flipped: true)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = g
+    img.draw(in: r, from: NSRect.zero, operation: NSCompositingOperation.sourceOver, fraction: alpha)
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+func drawRing(_ ctx: CGContext, _ c: CGPoint, _ r: CGFloat, _ w: CGFloat, _ frac: CGFloat,
+              _ color: CGColor, _ a: CGFloat, _ track: CGFloat = 0.14) {
+    if a <= 0.003 || r <= 1 { return }
+    let white = rgb(1, 1, 1)
+    ctx.setLineWidth(w)
+    ctx.setLineCap(.round)
+    ctx.setStrokeColor(white.copy(alpha: a * track) ?? white)
+    ctx.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+    ctx.strokePath()
+    let f = clampf(frac, 0, 1)
+    if f > 0.004 {
+        ctx.setStrokeColor(color.copy(alpha: a) ?? color)
+        ctx.beginPath()
+        ctx.addArc(center: c, radius: r, startAngle: -.pi / 2, endAngle: -.pi / 2 + 2 * .pi * f, clockwise: false)
+        ctx.strokePath()
     }
+}
 
-    // MARK: - Modes
+func drawBrackets(_ ctx: CGContext, _ r: CGRect, _ len: CGFloat, _ w: CGFloat, _ c: CGColor, _ a: CGFloat) {
+    if a <= 0.003 { return }
+    ctx.setStrokeColor(c.copy(alpha: a) ?? c)
+    ctx.setLineWidth(w)
+    ctx.setLineCap(.round)
+    let corners: [[CGPoint]] = [
+        [CGPoint(x: r.minX, y: r.minY + len), CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX + len, y: r.minY)],
+        [CGPoint(x: r.maxX - len, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.minY + len)],
+        [CGPoint(x: r.maxX, y: r.maxY - len), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.maxX - len, y: r.maxY)],
+        [CGPoint(x: r.minX + len, y: r.maxY), CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY - len)]
+    ]
+    for p in corners {
+        ctx.beginPath()
+        ctx.addLines(between: p)
+        ctx.strokePath()
+    }
+}
 
-    func alertW(_ k: AlertKind) -> CGFloat {
-        switch k {
-        case .ring: return 186
-        case .silent: return 214
-        case .volume: return 206
-        case .battery: return 252
-        case .pods: return 312
-        case .auth: return 238
-        case .permission: return 282
+func batterySymbol(_ pct: Int, _ charging: Bool) -> String {
+    if charging { return "battery.100.bolt" }
+    if pct <= 12 { return "battery.0" }
+    if pct <= 37 { return "battery.25" }
+    if pct <= 62 { return "battery.50" }
+    if pct <= 87 { return "battery.75" }
+    return "battery.100"
+}
+
+func batteryColor(_ pct: Int, _ charging: Bool) -> CGColor {
+    if charging { return rgb(0.32, 0.86, 0.45) }
+    if pct <= 20 { return rgb(0.95, 0.33, 0.28) }
+    if pct <= 40 { return rgb(0.98, 0.74, 0.28) }
+    return rgb(0.38, 0.87, 0.49)
+}
+
+func batterySpan(_ m: Int) -> String {
+    if m >= 60 { return "\(m / 60) h \(m % 60) m" }
+    return "\(m) m"
+}
+
+func batteryHeadline(_ b: BatteryState) -> String {
+    if !b.present { return "Battery Low" }
+    if b.charging { return "Charging" }
+    if b.percent <= 10 { return "Battery Critical" }
+    if b.percent <= 20 { return "Battery Low" }
+    return "Battery"
+}
+
+func batteryDetail(_ b: BatteryState) -> String {
+    if !b.present { return "Turn on Low Power Mode or charge soon." }
+    if b.charging {
+        if b.fullMinutes > 0 { return batterySpan(b.fullMinutes) + " until full" }
+        return "Connected to power"
+    }
+    if b.minutes > 0 { return batterySpan(b.minutes) + " remaining" }
+    if b.percent <= 20 { return "Turn on Low Power Mode or charge soon." }
+    return "On battery power"
+}
+
+func podsPercent(_ s: PodsState) -> Int {
+    if s.left >= 0 && s.right >= 0 { return (s.left + s.right) / 2 }
+    if s.left >= 0 { return s.left }
+    if s.right >= 0 { return s.right }
+    return s.single
+}
+
+func listeningName(_ m: Int) -> String {
+    switch m {
+    case 1: return "Noise Control Off"
+    case 2: return "Noise Cancellation"
+    case 3: return "Transparency"
+    case 4: return "Adaptive"
+    default: return "Noise Control"
+    }
+}
+
+func listeningSymbol(_ m: Int) -> String {
+    switch m {
+    case 2: return "wave.3.right"
+    case 3: return "ear"
+    case 4: return "person.wave.2"
+    default: return "speaker.slash"
+    }
+}
+
+func renderIsland(_ ctx: CGContext, size: CGSize) {
+    let I = Island.shared
+    ctx.clear(CGRect(origin: .zero, size: size))
+    guard I.isl.width > 2, I.isl.height > 2 else { return }
+    let S = I.S
+
+    let glowAmt = max(I.glowW, I.glowR)
+    if glowAmt > 0.01 {
+        let red = clampf(I.glowR, 0, 1)
+        let c = rgb(1 - 0.08 * red, 1 - 0.74 * red, 1 - 0.80 * red)
+        let n = 9
+        let step = 1.1 * S
+        for i in 1...n {
+            let f = 1 - CGFloat(i - 1) / CGFloat(n)
+            let d = (CGFloat(i) - 0.5) * step
+            let r = I.isl.insetBy(dx: -d, dy: -d)
+            let rr = I.radius + d
+            ctx.setStrokeColor(c.copy(alpha: glowAmt * (0.12 + 0.05 * red) * f * f) ?? c)
+            ctx.setLineWidth(step * 1.15)
+            ctx.addPath(CGPath(roundedRect: r, cornerWidth: rr, cornerHeight: rr, transform: nil))
+            ctx.strokePath()
         }
     }
 
-    func featureAlertActive() -> Bool {
-        guard time < alertUntil else { return false }
-        return alertKind == .battery || alertKind == .pods || alertKind == .auth || alertKind == .permission
+    fillRounded(ctx, I.isl, I.radius, rgb(0, 0, 0), 1)
+
+    if I.blur > 0.3 {
+        drawIslandBlurred(ctx, size: size, sigma: I.blur)
+        return
     }
 
-    func applyMode(_ m: Mode) {
-        mode = m
-        let S = self.S
-        var w: CGFloat = 126
-        var h: CGFloat = 37
-        switch m {
-        case .idle: w = 126; h = 37
-        case .compact: w = 192; h = 37
-        case .alert: w = alertW(alertKind); h = 37
-        case .expanded: w = 372; h = 196
-        }
-        let grow = (m == .expanded)
-        let resp = grow ? 0.46 : 0.28
-        let z = grow ? 0.72 : 0.86
-        sw.cfg(resp, z)
-        sh.cfg(resp, z)
-        ex.cfg(resp, z)
-        sw.target = Double(w * S)
-        sh.target = Double(h * S)
-        ex.target = grow ? 1.0 : 0.0
-    }
+    ctx.saveGState()
+    ctx.addPath(CGPath(roundedRect: I.isl, cornerWidth: I.radius, cornerHeight: I.radius, transform: nil))
+    ctx.clip()
+    ctx.concatenate(I.xf)
+    drawIslandContent(ctx)
+    ctx.restoreGState()
+}
 
-    func triggerAlert(_ kind: AlertKind, _ duration: Double) {
-        if kind != alertKind || time >= alertUntil { alertStart = time }
-        alertKind = kind
-        alertUntil = time + duration
-        switch kind {
-        case .battery, .pods, .auth, .permission: card = kind
-        default: card = nil
-        }
-    }
+private func drawIslandBlurred(_ ctx: CGContext, size: CGSize, sigma: CGFloat) {
+    let I = Island.shared
+    let scale: CGFloat = 2
+    let pad = min(max(sigma, 2) + 4, 40)
+    let rect = I.isl.insetBy(dx: -pad, dy: -pad)
+    let w = Int((rect.width * scale).rounded(.up))
+    let h = Int((rect.height * scale).rounded(.up))
+    guard w > 1, h > 1,
+          let off = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: gColorSpace,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+    off.scaleBy(x: scale, y: scale)
+    off.translateBy(x: -rect.minX, y: rect.maxY)
+    off.scaleBy(x: 1, y: -1)
+    off.concatenate(I.xf)
+    drawIslandContent(off)
 
-    func pollBattery() {
-        battery = BatteryMonitor.shared.state
-        guard battery.present, !battery.charging else { batteryThreshold = 100; return }
-        if battery.percent > 22 { batteryThreshold = 100 }
-        for th in [20, 10, 5] where battery.percent <= th && batteryThreshold > th {
-            batteryThreshold = th
-            triggerAlert(.battery, 10)
-            return
-        }
-    }
+    guard let cg = off.makeImage() else { return }
+    let src = CIImage(cgImage: cg)
+    let blurred = src.clampedToExtent()
+        .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: sigma * scale])
+        .cropped(to: src.extent)
+    guard let out = gCIContext.createCGImage(blurred, from: src.extent) else { return }
 
-    func podsChanged(_ s: PodsState) {
-        pods = s
-        guard s.connected || !s.name.isEmpty else { return }
-        triggerAlert(.pods, s.connected ? 6.0 : 4.5)
-    }
+    ctx.saveGState()
+    ctx.addPath(CGPath(roundedRect: I.isl, cornerWidth: I.radius, cornerHeight: I.radius, transform: nil))
+    ctx.clip()
+    ctx.interpolationQuality = .high
+    ctx.translateBy(x: rect.minX, y: rect.minY + rect.height)
+    ctx.scaleBy(x: 1, y: -1)
+    ctx.draw(out, in: CGRect(x: 0, y: 0, width: rect.width, height: rect.height))
+    ctx.restoreGState()
+}
 
-    func podsModeChanged() {
-        pods = AirPodsMonitor.shared.state
-    }
+func drawIslandContent(_ ctx: CGContext) {
+    let I = Island.shared
+    let S = I.S
+    let l = I.lay
+    let t = clampf(CGFloat(I.ex.x), 0, 1.12)
+    let white = rgb(1, 1, 1)
 
-    func beginAuth() {
-        authRunning = true
-        authOK = false
-        authLabel = "Authenticating"
-        authStart = time
-        triggerAlert(.auth, 60)
-    }
-
-    func finishAuth(_ ok: Bool, _ label: String) {
-        authRunning = false
-        authOK = ok
-        authLabel = label
-        triggerAlert(.auth, 3.4)
-    }
-
-    func showPermission(_ ok: Bool) {
-        authRunning = false
-        authOK = ok
-        authLabel = ok ? "Calendar Access Granted" : "Calendar Access Denied"
-        authStart = time
-        triggerAlert(.permission, 4.0)
-    }
-
-    func pullMedia() {
-        let st = MediaState.shared
-        has = st.has
-        mPlaying = st.playing
-        title = st.title
-        artist = st.artist
-        pos = st.pos
-        dur = st.dur
-        stamp = st.stamp
-        if st.trackSerial != seenTrack {
-            seenTrack = st.trackSerial
-            artFade = 0
-            lastActive = time
-        }
-        if st.artSerial != seenThumb {
-            seenThumb = st.artSerial
-            loadArt(st.artData)
-        }
-    }
-
-    private func loadArt(_ data: Data?) {
-        artImage = nil
-        artColor = (1, 1, 1)
-        guard let data = data,
-              let src = CGImageSourceCreateWithData(data as CFData, nil),
-              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return }
-        artImage = img
-        artColor = averageColor(img)
-    }
-
-    private func averageColor(_ img: CGImage) -> (CGFloat, CGFloat, CGFloat) {
-        var px = [UInt8](repeating: 0, count: 4)
-        var ok = false
-        px.withUnsafeMutableBytes { buf in
-            guard let ctx = CGContext(data: buf.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
-                                      bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-            ctx.interpolationQuality = .medium
-            ctx.draw(img, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-            ok = true
-        }
-        guard ok else { return (1, 1, 1) }
-        var r = CGFloat(px[0]) / 255
-        var g = CGFloat(px[1]) / 255
-        var b = CGFloat(px[2]) / 255
-        let mx = max(r, max(g, b))
-        if mx > 0.05 {
-            let k = 0.92 / mx
-            r = clampf(r * k, 0, 1)
-            g = clampf(g * k, 0, 1)
-            b = clampf(b * k, 0, 1)
-            r = lerpf(r, 1, 0.15)
-            g = lerpf(g, 1, 0.15)
-            b = lerpf(b, 1, 0.15)
+    if I.vMedia > 0.01 && I.has {
+        let rr = l.art
+        if let img = I.artImage {
+            ctx.saveGState()
+            ctx.addPath(CGPath(roundedRect: rr, cornerWidth: l.artR, cornerHeight: l.artR, transform: nil))
+            ctx.clip()
+            ctx.setAlpha(I.vMedia * I.artFade)
+            ctx.interpolationQuality = .high
+            ctx.translateBy(x: 0, y: rr.midY)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(img, in: CGRect(x: rr.minX, y: -rr.height / 2, width: rr.width, height: rr.height))
+            ctx.restoreGState()
         } else {
-            r = 1; g = 1; b = 1
+            fillRounded(ctx, rr, l.artR, white, 0.16 * I.vMedia)
         }
-        return (r, g, b)
+
+        let n = 5
+        let sz = l.wsz
+        let bw = 2.6 * S * sz
+        let gap = 1.9 * S * sz
+        let total = CGFloat(n) * bw + CGFloat(n - 1) * gap
+        let x0 = l.wx - total / 2
+        for i in 0..<n {
+            let phase = Double(I.waveTime) * (2.3 + 0.55 * Double(i)) + Double(i) * 1.7
+            let amp = 0.30 + 0.70 * abs(sin(phase))
+            let hMax = 16 * S * sz
+            let hh = lerpf(bw, bw + (hMax - bw) * CGFloat(amp), I.playT)
+            let x = x0 + CGFloat(i) * (bw + gap)
+            let c = rgb(lerpf(0.55, I.artColor.0, I.playT),
+                        lerpf(0.55, I.artColor.1, I.playT),
+                        lerpf(0.55, I.artColor.2, I.playT))
+            fillRounded(ctx, CGRect(x: x, y: l.wy - hh / 2, width: bw, height: hh), bw / 2, c, I.vMedia)
+        }
     }
 
-    func displayPos() -> Double {
-        var p: Double
-        if time < seekHoldUntil {
-            p = seekPos + (playingNow ? (time - (seekHoldUntil - 1.0)) : 0)
+    let aText = I.vText * clampf((t - 0.55) / 0.35, 0, 1) * (I.has ? 1 : 0)
+    if aText > 0.01 {
+        let pos = I.displayPos()
+        let dur = I.dur
+        var frac = dur > 0 ? CGFloat(pos / dur) : 0
+        if I.seeking { frac = I.seekFrac }
+        frac = clampf(frac, 0, 1)
+
+        var title = I.title
+        if title.isEmpty { title = "Unknown" }
+        drawText(ctx, title, font: sysFont(17 * S, .semibold), color: white, alpha: aText,
+                 rect: l.title, truncate: true)
+        drawText(ctx, I.artist, font: sysFont(16 * S, .regular), color: white, alpha: aText * 0.58,
+                 rect: l.artist, truncate: true)
+        drawText(ctx, fmtTime(pos), font: sysFont(12 * S, .semibold), color: white, alpha: aText * 0.5,
+                 rect: l.tEl, align: .left)
+        drawText(ctx, "-" + fmtTime(max(0, dur - pos)), font: sysFont(12 * S, .semibold), color: white,
+                 alpha: aText * 0.5, rect: l.tRem, align: .right)
+
+        let bh = lerpf(6, 10, I.barGrow) * S
+        let cy = l.bar.midY
+        let tr = CGRect(x: l.bar.minX, y: cy - bh / 2, width: l.bar.width, height: bh)
+        fillRounded(ctx, tr, bh / 2, white, aText * 0.24)
+        let fw = max(bh, tr.width * frac)
+        fillRounded(ctx, CGRect(x: tr.minX, y: tr.minY, width: fw, height: tr.height), bh / 2, white, aText * 0.92)
+
+        let ctrlGray = rgb(0.58, 0.58, 0.58)
+        drawChevrons(ctx, l.prev.x, l.prev.y, -1, (I.down && I.pressedHit == .prev) ? white : ctrlGray, aText)
+        drawChevrons(ctx, l.next.x, l.next.y, 1, (I.down && I.pressedHit == .next) ? white : ctrlGray, aText)
+
+        if I.playT < 0.995 {
+            let pa = aText * (1 - I.playT)
+            let pts = [
+                CGPoint(x: l.play.x - 9 * S, y: l.play.y - 14 * S),
+                CGPoint(x: l.play.x + 13 * S, y: l.play.y),
+                CGPoint(x: l.play.x - 9 * S, y: l.play.y + 14 * S)
+            ]
+            ctx.setFillColor(white.copy(alpha: pa) ?? white)
+            ctx.beginPath()
+            ctx.addLines(between: pts)
+            ctx.closePath()
+            ctx.fillPath()
+        }
+        if I.playT > 0.01 {
+            fillRounded(ctx, CGRect(x: l.play.x - 13 * S, y: l.play.y - 16 * S, width: 9 * S, height: 32 * S), 3 * S, white, aText * I.playT)
+            fillRounded(ctx, CGRect(x: l.play.x + 4 * S, y: l.play.y - 16 * S, width: 9 * S, height: 32 * S), 3 * S, white, aText * I.playT)
+        }
+
+        drawSpeaker(ctx, cx: l.vol.x - 2 * S, cy: l.vol.y, alpha: ((I.down && I.pressedHit == .vol) ? 1.0 : 0.62) * aText, k: 1.35)
+        drawSearchIcon(ctx, l.srch.x, l.srch.y, white, ((I.down && I.pressedHit == .srch) ? 1.0 : 0.62) * aText)
+    }
+
+    let aS = I.vSearch * clampf((t - 0.6) / 0.3, 0, 1)
+    if aS > 0.01 {
+        fillRounded(ctx, l.field, 14 * S, white, 0.14 * aS)
+        let padIn = 14 * S
+        let inner = l.field.insetBy(dx: padIn, dy: 0)
+        let fField = sysFont(17 * S, .regular)
+        var caretX = inner.minX
+        if I.query.isEmpty {
+            drawText(ctx, "Search songs or videos", font: fField, color: white, alpha: 0.45 * aS,
+                     rect: inner, align: .left)
         } else {
-            p = pos
-            if playingNow && mPlaying { p += Date().timeIntervalSince(stamp) }
+            let w = textWidth(I.query, fField)
+            var x = inner.minX
+            if w > inner.width { x = inner.maxX - w }
+            ctx.saveGState()
+            ctx.clip(to: inner)
+            drawText(ctx, I.query, font: fField, color: white, alpha: aS,
+                     rect: CGRect(x: x, y: inner.minY, width: w + 12, height: inner.height), align: .left)
+            ctx.restoreGState()
+            caretX = x + w
         }
-        if dur > 0 { p = min(p, dur) }
-        return max(p, 0)
+        if I.time.truncatingRemainder(dividingBy: 1.0) < 0.55 {
+            fillRounded(ctx, CGRect(x: caretX + 1 * S, y: l.field.minY + 11 * S,
+                                    width: 2 * S, height: l.field.height - 22 * S),
+                        1 * S, rgb(0.35, 0.65, 1.0), aS)
+        }
+
+        let ba: CGFloat = I.query.isEmpty ? 0.4 : 1.0
+        func button(_ r: CGRect, _ label: String, _ h: Hit) {
+            let aa = ba * aS * ((I.down && I.pressedHit == h) ? 0.75 : 1.0)
+            fillRounded(ctx, r, 20 * S, white, aa)
+            drawText(ctx, label, font: sysFont(15 * S, .semibold), color: rgb(0, 0, 0), alpha: aa, rect: r, align: .center)
+        }
+        button(l.bSpot, "Spotify", .spot)
+        button(l.bYt, "YouTube", .yt)
+        drawText(ctx, "↩ Spotify   ·   ⌘↩ YouTube   ·   esc cancel", font: sysFont(12 * S, .regular),
+                 color: white, alpha: 0.42 * aS, rect: l.hint, align: .center)
     }
 
-    func update(_ dt: Double) {
-        time += dt
-        pullMedia()
+    let red = rgb(0.84, 0.33, 0.26)
+    let tt = CGFloat(I.time - I.alertStart)
+    let aSil = clampf(CGFloat(I.aSilent.x), 0, 1)
+    let aRg = clampf(CGFloat(I.aRing.x), 0, 1)
+    func zsc(_ sp: Spring) -> CGFloat { lerpf(0.5, 1, clampf(CGFloat(sp.x), 0, 1.12)) }
+    func zoom(_ ax: CGFloat, _ ay: CGFloat, _ sc: CGFloat, _ offX: CGFloat) {
+        ctx.translateBy(x: offX, y: 0)
+        ctx.translateBy(x: ax, y: ay)
+        ctx.scaleBy(x: sc, y: sc)
+        ctx.translateBy(x: -ax, y: -ay)
+    }
 
-        if overridePlayUntil > 0 && time >= overridePlayMin && (mPlaying == overridePlay || time >= overridePlayUntil) {
-            overridePlayUntil = 0
+    if aSil > 0.01 {
+        ctx.saveGState()
+        zoom(l.capX, l.capY, zsc(I.aSilent), 0)
+        fillRounded(ctx, l.capsule, 13 * S, red, aSil)
+        ctx.restoreGState()
+    }
+    let aBell = max(aSil, aRg)
+    if aBell > 0.01 {
+        let slide = clampf(CGFloat(I.bellSlide.x), 0, 1.1)
+        let bx = lerpf(l.ringX, l.capX, slide)
+        let ang = (I.alertKind == .ring && tt < 1.6) ? 24 * exp(-2.4 * tt) * sin(tt * 27) : 0
+        let gap = rgb(red.components?[0] ?? 0, red.components?[1] ?? 0, red.components?[2] ?? 0)
+        drawBell(ctx, cx: bx, cy: l.ringY, scale: 13 * S, color: white, alpha: aBell,
+                 slash: clampf(CGFloat(I.slashT.x), 0, 1), bg: gap, ang: ang)
+    }
+    if aSil > 0.01 {
+        ctx.saveGState()
+        zoom(l.alertText.maxX - 24 * S, l.capY, zsc(I.aSilent), -(1 - aSil) * 14 * S)
+        drawText(ctx, "Silent", font: sysFont(15 * S, .semibold), color: red, alpha: aSil,
+                 rect: l.alertText, align: .right)
+        ctx.restoreGState()
+    }
+    if aRg > 0.01 {
+        ctx.saveGState()
+        zoom(l.alertText.maxX - 18 * S, l.capY, zsc(I.aRing), (1 - aRg) * 14 * S)
+        drawText(ctx, "Ring", font: sysFont(15 * S, .semibold), color: white, alpha: aRg,
+                 rect: l.alertText, align: .right)
+        ctx.restoreGState()
+    }
+    let aVl = clampf(CGFloat(I.aVolS.x), 0, 1)
+    if aVl > 0.01 {
+        ctx.saveGState()
+        let midX = (l.ringX + l.alertText.maxX) * 0.5
+        zoom(midX, l.ringY, zsc(I.aVolS), 0)
+        drawSpeaker(ctx, cx: l.ringX - 2 * S, cy: l.ringY, alpha: aVl, k: 0.85)
+        let x0 = l.ringX + 17 * S
+        let x1 = l.alertText.maxX - 2 * S
+        let bh = 7 * S
+        let cy = l.ringY
+        let tr = CGRect(x: x0, y: cy - bh / 2, width: max(0, x1 - x0), height: bh)
+        fillRounded(ctx, tr, bh / 2, white, aVl * 0.25)
+        let fw = tr.width * clampf(I.volShown, 0, 1)
+        if fw > 0.5 {
+            fillRounded(ctx, CGRect(x: tr.minX, y: tr.minY, width: max(bh, fw), height: tr.height), bh / 2, white, aVl)
         }
-        let playing = overridePlayUntil > 0 ? overridePlay : mPlaying
-        playingNow = playing && has
-        if playingNow { lastActive = time }
+        ctx.restoreGState()
+    }
 
-        let m = (expanded ? 6.0 : 4.0) * Double(S)
-        let inIsland = Double(pointer.x) >= Double(isl.minX) - m
-            && Double(pointer.x) <= Double(isl.maxX) + m
-            && Double(pointer.y) <= Double(isl.maxY) + m
-            && Double(pointer.y) >= Double(-m)
-        if searchMode || down {
-            hoverT = 0
-            leaveTimer = 0
-        } else if inIsland {
-            leaveTimer = 0
-            if !expanded {
-                hoverT += dt
-                if hoverT > 0.07 { expanded = true; hoverT = 0 }
+    let aB = clampf(CGFloat(I.aBat.x), 0, 1)
+    if aB > 0.01 {
+        let pct = I.battery.present ? I.battery.percent : 14
+        let col = batteryColor(pct, I.battery.charging)
+        drawSymbol(ctx, batterySymbol(pct, I.battery.charging), l.batIcon, col, aB)
+        drawText(ctx, I.battery.charging ? "Charging" : "Battery Low", font: sysFont(14.5 * S, .semibold),
+                 color: white, alpha: aB, rect: l.batTitle, truncate: true)
+        drawText(ctx, "\(pct)%", font: sysFont(16 * S, .semibold), color: col, alpha: aB,
+                 rect: l.batPct, align: .right)
+    }
+
+    let aP = clampf(CGFloat(I.aPods.x), 0, 1)
+    if aP > 0.01 {
+        let st = I.pods
+        let name = st.name.isEmpty ? "AirPods" : st.name
+        let dim = rgb(0.52, 0.52, 0.56)
+        drawSymbol(ctx, "airpodspro", l.podIcon, st.connected ? white : dim, aP)
+        drawText(ctx, st.connected ? "Connected" : "Disconnected", font: sysFont(10.5 * S, .semibold),
+                 color: st.connected ? rgb(0.55, 0.86, 0.62) : dim, alpha: aP, rect: l.podLabel, tracking: 0.4)
+        drawText(ctx, name, font: sysFont(14.5 * S, .semibold), color: white,
+                 alpha: aP * (st.connected ? 1 : 0.55), rect: l.podName, truncate: true)
+        let pct = podsPercent(st)
+        if pct >= 0 {
+            drawRing(ctx, l.podRing, l.podRingR, 3 * S, CGFloat(pct) / 100, batteryColor(pct, false), aP, 0.16)
+            drawText(ctx, "\(pct)", font: sysFont(10.5 * S, .semibold), color: white, alpha: aP,
+                     rect: CGRect(x: l.podRing.x - 16 * S, y: l.podRing.y - 8 * S, width: 32 * S, height: 16 * S), align: .center)
+        }
+    }
+
+    let aA = clampf(CGFloat(I.aAuth.x), 0, 1)
+    if aA > 0.01 {
+        let ok = I.authOK
+        let col = I.authRunning ? white : (ok ? rgb(0.35, 0.87, 0.46) : rgb(0.95, 0.35, 0.30))
+        let sym = I.authRunning ? "touchid" : (ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+        drawSymbol(ctx, sym, l.authIcon, col, aA)
+        drawText(ctx, I.authLabel.isEmpty ? "Authenticating" : I.authLabel, font: sysFont(15 * S, .semibold),
+                 color: white, alpha: aA, rect: l.authLabel, truncate: true)
+    }
+
+    let aPm = clampf(CGFloat(I.aPerm.x), 0, 1)
+    if aPm > 0.01 {
+        let col = I.authOK ? rgb(0.35, 0.87, 0.46) : rgb(0.95, 0.35, 0.30)
+        drawSymbol(ctx, "lock.shield", l.authIcon, col, aPm)
+        drawText(ctx, I.authLabel.isEmpty ? "Calendar Access" : I.authLabel, font: sysFont(14.5 * S, .semibold),
+                 color: white, alpha: aPm, rect: l.authLabel, truncate: true)
+    }
+
+    let aC = I.vCard * clampf((t - 0.5) / 0.35, 0, 1)
+    if aC > 0.01 && I.expanded {
+        if I.card == .battery {
+            let st = I.battery
+            let pct = st.present ? st.percent : 14
+            let col = batteryColor(pct, st.charging)
+            drawRing(ctx, l.ringC, l.ringR, 8 * S, CGFloat(pct) / 100, col, aC, 0.13)
+            drawText(ctx, "\(pct)%", font: sysFont(28 * S, .semibold), color: white, alpha: aC,
+                     rect: CGRect(x: l.ringC.x - l.ringR, y: l.ringC.y - 17 * S, width: l.ringR * 2, height: 34 * S), align: .center)
+            if st.charging {
+                drawSymbol(ctx, "bolt.fill", CGRect(x: l.ringC.x - 7 * S, y: l.ringC.y + l.ringR + 5 * S, width: 14 * S, height: 14 * S), col, aC * 0.9)
             }
-        } else {
-            hoverT = 0
-            if expanded {
-                leaveTimer += dt
-                if leaveTimer > 0.05 { expanded = false; leaveTimer = 0 }
+            drawText(ctx, "BATTERY", font: sysFont(10 * S, .semibold), color: rgb(0.62, 0.62, 0.66),
+                     alpha: aC, rect: l.cardKick, tracking: 1.4)
+            drawText(ctx, batteryHeadline(st), font: sysFont(21 * S, .semibold), color: white,
+                     alpha: aC, rect: l.cardTitle, truncate: true)
+            drawText(ctx, batteryDetail(st), font: sysFont(12.5 * S, .regular), color: rgb(0.62, 0.62, 0.66),
+                     alpha: aC, rect: l.cardSub, truncate: true)
+            let chip = l.cardChip
+            fillRounded(ctx, chip, chip.height / 2, white, aC * 0.10)
+            drawSymbol(ctx, "bolt.fill", CGRect(x: chip.minX + 12 * S, y: chip.midY - 7 * S, width: 14 * S, height: 14 * S),
+                       st.lowPower ? col : rgb(0.60, 0.60, 0.64), aC)
+            drawText(ctx, st.lowPower ? "Low Power Mode On" : "Low Power Mode Off", font: sysFont(11.5 * S, .semibold),
+                     color: white, alpha: aC * 0.85,
+                     rect: CGRect(x: chip.minX + 32 * S, y: chip.minY, width: chip.width - 42 * S, height: chip.height), truncate: true)
+            drawText(ctx, "Open Battery Settings", font: sysFont(11.5 * S, .medium), color: white,
+                     alpha: aC * 0.45, rect: l.cardHint)
+        }
+
+        if I.card == .pods {
+            let st = I.pods
+            let name = st.name.isEmpty ? "AirPods" : st.name
+            let on = st.connected
+            drawSymbol(ctx, "airpodspro", l.podIconBig, white, aC * (on ? 1 : 0.35))
+            drawText(ctx, on ? "CONNECTED" : "DISCONNECTED", font: sysFont(10 * S, .semibold),
+                     color: on ? rgb(0.45, 0.86, 0.55) : rgb(0.55, 0.55, 0.58), alpha: aC,
+                     rect: l.podCardKick, tracking: 1.3)
+            drawText(ctx, name, font: sysFont(19 * S, .semibold), color: white,
+                     alpha: aC * (on ? 1 : 0.5), rect: l.podCardName, truncate: true)
+            if on && st.listening > 0 {
+                let chip = l.podModeChip
+                fillRounded(ctx, chip, chip.height / 2, white, aC * 0.10)
+                drawSymbol(ctx, listeningSymbol(st.listening),
+                           CGRect(x: chip.minX + 10 * S, y: chip.midY - 7 * S, width: 14 * S, height: 14 * S), white, aC * 0.9)
+                drawText(ctx, listeningName(st.listening), font: sysFont(11 * S, .semibold), color: white,
+                         alpha: aC * 0.9,
+                         rect: CGRect(x: chip.minX + 30 * S, y: chip.minY, width: chip.width - 38 * S, height: chip.height),
+                         truncate: true)
+            } else {
+                drawText(ctx, on ? "Noise control unavailable" : "Connect to see battery",
+                         font: sysFont(11 * S, .regular), color: white, alpha: aC * 0.45, rect: l.podModeChip)
             }
-        }
-
-        let want: Mode
-        if expanded { want = .expanded }
-        else if time < alertUntil { want = .alert }
-        else if has { want = .compact }
-        else { want = .idle }
-        if want != mode { applyMode(want) }
-        if mode == .alert { sw.target = Double(alertW(alertKind) * S) }
-
-        sw.step(dt)
-        sh.step(dt)
-        ex.step(dt)
-        sL.step(dt)
-        sR.step(dt)
-        sB.step(dt)
-        press.step(dt)
-        press.target = down ? 1.0 : 0.0
-
-        func sm(_ v: inout CGFloat, _ target: CGFloat, _ up: CGFloat, _ down: CGFloat) {
-            let rate = target > v ? up : down
-            v += (target - v) * (1 - exp(-rate * CGFloat(dt)))
-        }
-
-        let showMedia = card == nil && !searchMode && ((mode == .compact && has) || mode == .expanded)
-        sm(&vMedia, showMedia ? 1 : 0, 14, 30)
-        sm(&vText, (expanded && !searchMode && card == nil) ? 1 : 0, 14, 34)
-        sm(&vSearch, (expanded && searchMode) ? 1 : 0, 14, 34)
-        sm(&vAlert, mode == .alert ? 1 : 0, 16, 24)
-        sm(&vCal, (!has && !searchMode && card == nil) ? 1 : 0, 10, 14)
-        sm(&vCard, (expanded && card != nil && !searchMode) ? 1 : 0, 12, 26)
-        sm(&playT, playingNow ? 1 : 0, 10, 10)
-        sm(&artFade, 1, 6, 6)
-        sm(&barGrow, seeking ? 1 : 0, 18, 18)
-        if playingNow { waveTime += CGFloat(dt) }
-
-        aRing.target = (mode == .alert && alertKind == .ring) ? 1 : 0
-        aSilent.target = (mode == .alert && alertKind == .silent) ? 1 : 0
-        aVolS.target = (mode == .alert && alertKind == .volume) ? 1 : 0
-        aBat.target = (mode == .alert && alertKind == .battery) ? 1 : 0
-        aPods.target = (mode == .alert && alertKind == .pods) ? 1 : 0
-        aAuth.target = (mode == .alert && alertKind == .auth) ? 1 : 0
-        aPerm.target = (mode == .alert && alertKind == .permission) ? 1 : 0
-        aRing.step(dt)
-        aSilent.step(dt)
-        aVolS.step(dt)
-        aBat.step(dt)
-        aPods.step(dt)
-        aAuth.step(dt)
-        aPerm.step(dt)
-
-        if !expanded && card != nil && time > alertUntil + 0.9 { card = nil }
-
-        if mode == .alert && alertKind != .volume {
-            let silentNow = (alertKind == .silent)
-            let anyShown = aRing.x > 0.02 || aSilent.x > 0.02
-            bellSlide.target = silentNow ? 1.0 : 0.0
-            slashT.target = silentNow ? 1.0 : 0.0
-            if !anyShown { bellSlide.snap(bellSlide.target) }
-        }
-        bellSlide.step(dt)
-        slashT.step(dt)
-
-        sm(&volShown, VolumeControl.shared.muted ? 0 : CGFloat(VolumeControl.shared.volume), 20, 20)
-
-        let silentAlert = (mode == .alert && alertKind == .silent)
-        sm(&glowR, silentAlert ? 1 : 0, 6, 4.5)
-        sm(&glowW, (!silentAlert && playingNow) ? 1 : 0, 4.5, 4.5)
-
-        let vw = volWaves()
-        for i in 0..<3 { sm(&waveAmt[i], i < vw ? 1 : 0, 16, 16) }
-        sm(&muteAmt, VolumeControl.shared.muted ? 1 : 0, 16, 16)
-
-        let cx = canvas.width * 0.5
-        let top = topInset
-        let w = max(20 * S, CGFloat(sw.x))
-        let h = max(14 * S, CGFloat(sh.x))
-        let p = CGFloat(press.x)
-        let nL = cx - w / 2 - 3 * S * p
-        let nR = cx + w / 2 + 3 * S * p
-        let nB = top + h + 2 * S * p
-        var L = nL + CGFloat(sL.x)
-        var R = nR + CGFloat(sR.x)
-        var B = nB + CGFloat(sB.x)
-        if R - L < 20 * S {
-            let mm = (L + R) / 2
-            L = mm - 10 * S
-            R = mm + 10 * S
-        }
-        if B - top < 14 * S { B = top + 14 * S }
-        isl = CGRect(x: L, y: top, width: R - L, height: B - top)
-
-        if firstFrame { pL = L; pR = R; pB = B; firstFrame = false }
-        let speed = (abs(L - pL) + abs(R - pR) + abs(B - pB)) / CGFloat(max(dt, 0.0005)) / S
-        let stretch = (abs(CGFloat(sL.x)) + abs(CGFloat(sR.x)) + abs(CGFloat(sB.x))) / S
-        let blurTarget = clampf(speed * 0.0055 + stretch * 0.05, 0, 11) * S
-        blur += (blurTarget - blur) * (1 - exp(-18 * CGFloat(dt)))
-        pL = L; pR = R; pB = B
-
-        let t01 = clampf(CGFloat(ex.x), 0, 1)
-        radius = min(lerpf(18.5 * S, 32 * S, t01), (R - L) / 2, (B - top) / 2)
-        let nw = max(1, nR - nL)
-        let nh = max(1, nB - top)
-        sx = (R - L) / nw
-        sy = (B - top) / nh
-        tx = L - nL * sx
-        ty = top * (1 - sy)
-        xf = CGAffineTransform(scaleX: sx, y: sy).concatenating(CGAffineTransform(translationX: tx, y: ty))
-        lay = ComputeLayout(cL: nL, cT: top, cR: nR, cB: nB, tRaw: CGFloat(ex.x))
-
-        topmostTimer += dt
-        if topmostTimer > 2.0 && !searchMode { topmostTimer = 0 }
-
-        animating = sw.moving || sh.moving || ex.moving || sL.moving || sR.moving || sB.moving
-            || press.moving || down || (playingNow && vMedia > 0.02)
-            || abs(vMedia - (showMedia ? 1 : 0)) > 0.01
-            || abs(vAlert - (mode == .alert ? 1 : 0)) > 0.01
-            || abs(vCal - ((!has && !searchMode) ? 1 : 0)) > 0.01
-            || searchMode || artFade < 0.99
-            || abs(playT - (playingNow ? 1 : 0)) > 0.01
-            || expanded || hoverT > 0 || time < alertUntil
-            || aRing.moving || aSilent.moving || aVolS.moving
-            || aBat.moving || aPods.moving || aAuth.moving || aPerm.moving
-            || abs(vCard - ((expanded && card != nil && !searchMode) ? 1 : 0)) > 0.01
-            || (authRunning && card == .auth)
-            || bellSlide.moving || slashT.moving
-            || glowR > 0.01 || glowW > 0.01 || blur > 0.15
-    }
-
-    func volWaves() -> Int {
-        if VolumeControl.shared.muted { return 0 }
-        let v = VolumeControl.shared.volume
-        if v > 0.66 { return 3 }
-        if v > 0.33 { return 2 }
-        if v > 0.01 { return 1 }
-        return 0
-    }
-
-    func alertShowsSilenceOrRing() -> Bool {
-        return (alertKind == .silent || alertKind == .ring) && time < alertUntil
-    }
-
-    func pollVolume() {
-        VolumeControl.shared.refresh()
-        let vc = VolumeControl.shared
-        let silentNow = vc.muted || vc.volume <= 0.005
-        let changed = lastVolRemote >= 0 && abs(vc.volume - lastVolRemote) > 0.004
-        lastVolRemote = vc.volume
-        if silentKnown && silentNow != silentState {
-            triggerAlert(silentNow ? .silent : .ring, 2.4)
-        } else if changed && !silentNow && time > volHoldUntil && !alertShowsSilenceOrRing() && !featureAlertActive() {
-            triggerAlert(.volume, 1.6)
-        }
-        silentState = silentNow
-        silentKnown = true
-    }
-
-    func setVolume(_ v: Float) {
-        let v = min(max(v, 0), 1)
-        VolumeControl.shared.setVolume(v)
-        volShown = CGFloat(v)
-        lastVolRemote = v
-        volHoldUntil = time + 0.5
-        let silentNow = VolumeControl.shared.muted || v <= 0.005
-        if silentKnown && silentNow != silentState {
-            triggerAlert(silentNow ? .silent : .ring, 2.4)
-        } else if !expanded && !silentNow && !alertShowsSilenceOrRing() && !featureAlertActive() {
-            triggerAlert(.volume, 1.6)
-        }
-        silentState = silentNow
-        silentKnown = true
-    }
-
-    func scroll(_ dy: CGFloat, _ precise: Bool) {
-        guard dy != 0 else { return }
-        let step: Float = precise ? 0.006 : 0.04
-        setVolume(VolumeControl.shared.volume + Float(dy) * step)
-    }
-
-    func containsPoint(_ p: CGPoint) -> Bool {
-        let m = 2 * S
-        return p.x >= isl.minX - m && p.x <= isl.maxX + m && p.y >= isl.minY - m && p.y <= isl.maxY + m
-    }
-
-    func wantsMouseEvents() -> Bool {
-        if down { return true }
-        return containsPoint(pointer)
-    }
-
-    func hitTest(_ px: CGFloat, _ py: CGFloat) -> Hit {
-        let l = lay
-        let x = (px - tx) / sx
-        let y = (py - ty) / sy
-        if !expanded || ex.x < 0.75 { return .body }
-        if let c = card {
-            if c == .pods && l.podModeChip.contains(CGPoint(x: x, y: y)) { return .podmode }
-            if c == .battery && l.cardHint.contains(CGPoint(x: x, y: y)) { return .settings }
-            if c == .pods && l.podHint.contains(CGPoint(x: x, y: y)) { return .settings }
-            return .body
-        }
-        if searchMode {
-            if l.bSpot.contains(CGPoint(x: x, y: y)) { return .spot }
-            if l.bYt.contains(CGPoint(x: x, y: y)) { return .yt }
-            if l.field.contains(CGPoint(x: x, y: y)) { return .field }
-            return .body
-        }
-        if !has { return .body }
-        func near(_ p: CGPoint, _ r: CGFloat) -> Bool { abs(x - p.x) < r && abs(y - p.y) < r }
-        if near(l.play, 28 * S) { return .play }
-        if near(l.prev, 26 * S) { return .prev }
-        if near(l.next, 26 * S) { return .next }
-        if near(l.vol, 22 * S) { return .vol }
-        if near(l.srch, 22 * S) { return .srch }
-        let br = CGRect(x: l.bar.minX - 6 * S, y: l.bar.minY - 14 * S, width: l.bar.width + 12 * S, height: l.bar.height + 28 * S)
-        if br.contains(CGPoint(x: x, y: y)) { return .seek }
-        return .body
-    }
-
-    func updateSeek(_ x: CGFloat) {
-        let lx = (x - tx) / sx
-        seekFrac = clampf((lx - lay.bar.minX) / max(1, lay.bar.width), 0, 1)
-    }
-
-    func commitSeek() {
-        guard dur > 0 else { return }
-        let p = Double(seekFrac) * dur
-        seekPos = p
-        seekHoldUntil = time + 1.0
-        NowPlaying.shared.seek(p)
-    }
-
-    func mouseDown(_ p: CGPoint) {
-        guard containsPoint(p) else { return }
-        down = true
-        moved = false
-        seeking = false
-        dragging = false
-        pressedHit = hitTest(p.x, p.y)
-        startPt = p
-        if pressedHit == .seek {
-            seeking = true
-            updateSeek(p.x)
-        } else {
-            dragging = true
-            sL.cfg(0.09, 1.0)
-            sR.cfg(0.09, 1.0)
-            sB.cfg(0.09, 1.0)
-        }
-        press.cfg(0.18, 0.8)
-    }
-
-    func mouseDragged(_ p: CGPoint) {
-        guard down else { return }
-        if seeking {
-            updateSeek(p.x)
-            return
-        }
-        let dx = p.x - startPt.x
-        let dy = p.y - startPt.y
-        if !moved && sqrt(dx * dx + dy * dy) > 5 * S { moved = true }
-        if moved { setDragTargets(dx, dy) }
-    }
-
-    func mouseUp(_ p: CGPoint) {
-        guard down else { return }
-        down = false
-        if seeking {
-            seeking = false
-            updateSeek(p.x)
-            commitSeek()
-            return
-        }
-        dragging = false
-        sL.cfg(0.50, 0.42)
-        sR.cfg(0.50, 0.42)
-        sB.cfg(0.50, 0.42)
-        sL.target = 0
-        sR.target = 0
-        sB.target = 0
-        if !moved { handleClick(pressedHit) }
-    }
-
-    func setDragTargets(_ dx: CGFloat, _ dy: CGFloat) {
-        let S = self.S
-        let exAmt = rubber(abs(dx), 170 * S)
-        let eyAmt = dy >= 0 ? rubber(dy, 150 * S) : -rubber(-dy, 16 * S)
-        var tL: CGFloat
-        var tR: CGFloat
-        if dx >= 0 {
-            tR = exAmt
-            tL = 0.16 * exAmt
-        } else {
-            tL = -exAmt
-            tR = -0.16 * exAmt
-        }
-        let sq = dy > 0 ? 0.05 * eyAmt : 0
-        tL += sq
-        tR -= sq
-        sL.target = Double(tL)
-        sR.target = Double(tR)
-        sB.target = Double(eyAmt)
-    }
-
-    func handleClick(_ h: Hit) {
-        if !expanded { expanded = true; return }
-        switch h {
-        case .play:
-            overridePlay = !playingNow
-            overridePlayMin = time + 0.45
-            overridePlayUntil = time + 4.0
-            NowPlaying.shared.togglePlay()
-        case .next: NowPlaying.shared.next()
-        case .prev: NowPlaying.shared.prev()
-        case .vol:
-            VolumeControl.shared.toggleMute()
-            volHoldUntil = time + 0.5
-        case .srch: enterSearch()
-        case .spot: doSearch(youtube: false)
-        case .yt: doSearch(youtube: true)
-        case .podmode: AirPodsMonitor.shared.cycleMode()
-        case .settings: openSettings()
-        default: break
-        }
-    }
-
-    func openSettings() {
-        let batteryURL = "x-apple.systempreferences:com.apple.Battery-Settings.extension"
-        let batteryOld = "x-apple.systempreferences:com.apple.preference.battery"
-        let btURL = "x-apple.systempreferences:com.apple.Bluetooth-Settings.extension"
-        let btOld = "x-apple.systempreferences:com.apple.preference.bluetooth"
-        let first = card == .battery ? batteryURL : btURL
-        let second = card == .battery ? batteryOld : btOld
-        if let u = URL(string: first), NSWorkspace.shared.open(u) { return }
-        if let u = URL(string: second) { NSWorkspace.shared.open(u) }
-    }
-
-    func enterSearch() {
-        searchMode = true
-        query = ""
-        searchActive(true)
-    }
-
-    func exitSearch() {
-        guard searchMode else { return }
-        searchMode = false
-        searchActive(false)
-    }
-
-    func doSearch(youtube: Bool) {
-        guard !query.isEmpty else { return }
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~")
-        let enc = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
-        if youtube {
-            if let u = URL(string: "https://www.youtube.com/results?search_query=" + enc) {
-                NSWorkspace.shared.open(u)
+            let rows: [(String, Int)] = [("L", st.left), ("R", st.right), ("Case", st.caseLevel)]
+            let cL = l.cardL
+            let cT = l.cardT
+            var y = cT + 46 * S
+            var any = false
+            for (label, value) in rows where value >= 0 {
+                any = true
+                drawText(ctx, label, font: sysFont(11 * S, .semibold), color: rgb(0.62, 0.62, 0.66), alpha: aC,
+                         rect: CGRect(x: cL + 196 * S, y: y, width: 30 * S, height: 16 * S))
+                let br = CGRect(x: cL + 228 * S, y: y + 6 * S, width: 74 * S, height: 5 * S)
+                fillRounded(ctx, br, br.height / 2, white, aC * 0.16)
+                fillRounded(ctx, CGRect(x: br.minX, y: br.minY, width: max(br.height, br.width * CGFloat(value) / 100), height: br.height),
+                            br.height / 2, batteryColor(value, false), aC * 0.95)
+                drawText(ctx, "\(value)%", font: sysFont(11 * S, .semibold), color: white, alpha: aC * 0.9,
+                         rect: CGRect(x: cL + 308 * S, y: y, width: 44 * S, height: 16 * S), align: .right)
+                y += 30 * S
             }
-        } else if let u = URL(string: "spotify:search:" + enc) {
-            if !NSWorkspace.shared.open(u), let w = URL(string: "https://open.spotify.com/search/" + enc) {
-                NSWorkspace.shared.open(w)
+            if !any && on {
+                drawText(ctx, "Battery levels unavailable", font: sysFont(11 * S, .regular), color: rgb(0.55, 0.55, 0.58),
+                         alpha: aC, rect: CGRect(x: cL + 196 * S, y: cT + 48 * S, width: 156 * S, height: 16 * S), truncate: true)
             }
+            drawText(ctx, on ? "Click mode to cycle" : "Open Bluetooth Settings",
+                     font: sysFont(11 * S, .medium), color: white, alpha: aC * 0.42, rect: l.podHint, truncate: true)
         }
-        exitSearch()
+
+        if I.card == .auth || I.card == .permission {
+            let perm = I.card == .permission
+            let ok = I.authOK
+            let running = I.authRunning
+            let col = running ? white : (ok ? rgb(0.35, 0.87, 0.46) : rgb(0.95, 0.35, 0.30))
+            let phase = max(0, CGFloat(I.time - I.authStart))
+            if running {
+                for i in 0..<2 {
+                    let p = (phase * 0.9 + CGFloat(i) * 0.5).truncatingRemainder(dividingBy: 1)
+                    let rr = l.authBig.width * 0.62 + p * 32 * S
+                    ctx.setStrokeColor(col.copy(alpha: aC * 0.22 * (1 - p)) ?? col)
+                    ctx.setLineWidth(1.5 * S)
+                    ctx.addEllipse(in: CGRect(x: l.authBig.midX - rr, y: l.authBig.midY - rr, width: rr * 2, height: rr * 2))
+                    ctx.strokePath()
+                }
+            }
+            let br = l.authBig.insetBy(dx: -12 * S, dy: -12 * S)
+            drawBrackets(ctx, br, 10 * S, 2.5 * S, col, aC * (running ? 0.9 : 0.4))
+            let sym = perm ? "lock.shield" : (running ? "touchid" : (ok ? "checkmark.circle.fill" : "xmark.circle.fill"))
+            drawSymbol(ctx, sym, l.authBig, col, aC, .regular)
+            if running {
+                let yy = br.minY + br.height * (0.5 + 0.45 * sin(phase * 2.6))
+                fillRounded(ctx, CGRect(x: br.minX + 6 * S, y: yy, width: br.width - 12 * S, height: 2 * S), 1 * S, col, aC * 0.55)
+            }
+            let title = perm ? I.authLabel : (running ? "Authenticating" : I.authLabel)
+            drawText(ctx, title.isEmpty ? "Authenticating" : title, font: sysFont(19 * S, .semibold), color: white,
+                     alpha: aC, rect: l.authTitle, align: .center, truncate: true)
+            let sub = perm ? (ok ? "MacLand can show your calendar" : "Enable it in Privacy & Security")
+                           : (running ? "Touch ID" : (ok ? "It's you" : "Try again"))
+            drawText(ctx, sub, font: sysFont(12 * S, .regular), color: white, alpha: aC * 0.5,
+                     rect: l.authSub, align: .center)
+        }
     }
 
-    func handleKey(_ e: NSEvent) -> Bool {
-        guard searchMode else { return false }
-        switch e.keyCode {
-        case 53:
-            exitSearch()
-            return true
-        case 36, 76:
-            doSearch(youtube: e.modifierFlags.contains(.command))
-            return true
-        case 51:
-            if !query.isEmpty { query.removeLast() }
-            return true
-        default:
-            break
-        }
-        if let chars = e.characters {
-            for scalar in chars.unicodeScalars where scalar.value >= 32 && scalar.value != 127 {
-                if query.count < 200 { query.unicodeScalars.append(scalar) }
-            }
-            return true
-        }
-        return false
-    }
-
-    func snapshotSetup() {
-        ex.snap(1)
-        isl = CGRect(x: 64, y: 36, width: 372, height: 196)
-        radius = 36
-        sx = 1
-        sy = 1
-        tx = 0
-        ty = 0
-        xf = .identity
-        lay = ComputeLayout(cL: isl.minX, cT: isl.minY, cR: isl.maxX, cB: isl.maxY, tRaw: 1)
-        vCal = 1
-        vMedia = 0
-        vText = 0
-        vSearch = 0
-        vAlert = 0
-        vMedia = 0
-        playT = 0
-        has = false
-        expanded = true
-    }
+    drawCalendar(ctx)
 }
