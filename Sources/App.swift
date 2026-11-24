@@ -45,7 +45,7 @@ final class IslandView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        Island.shared.scroll(event.scrollingDeltaY)
+        Island.shared.scroll(event.scrollingDeltaY, event.hasPreciseScrollingDeltas)
     }
 
     override func keyDown(with event: NSEvent) {
