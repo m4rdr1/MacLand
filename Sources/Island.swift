@@ -6,8 +6,8 @@ func lerpf(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { return a + (b 
 func rubber(_ x: CGFloat, _ d: CGFloat) -> CGFloat { return (1 - 1 / ((x * 0.55 / d) + 1)) * d }
 
 enum Mode { case idle, compact, alert, expanded }
-enum Hit { case none, body, seek, prev, play, next, vol, srch, spot, yt, field }
-enum AlertKind: Int { case ring = 0, silent = 1, volume = 2 }
+enum Hit { case none, body, seek, prev, play, next, vol, srch, spot, yt, field, podmode, settings }
+enum AlertKind: Int { case ring = 0, silent = 1, volume = 2, battery = 3, pods = 4, auth = 5, permission = 6 }
 
 struct Lay {
     var art = CGRect.zero
@@ -40,6 +40,33 @@ struct Lay {
     var calNext = CGRect.zero
     var calStatus1 = CGRect.zero
     var calStatus2 = CGRect.zero
+    var batIcon = CGRect.zero
+    var batTitle = CGRect.zero
+    var batPct = CGRect.zero
+    var podIcon = CGRect.zero
+    var podLabel = CGRect.zero
+    var podName = CGRect.zero
+    var podRing = CGPoint.zero
+    var podRingR: CGFloat = 15
+    var authIcon = CGRect.zero
+    var authLabel = CGRect.zero
+    var ringC = CGPoint.zero
+    var ringR: CGFloat = 40
+    var cardKick = CGRect.zero
+    var cardTitle = CGRect.zero
+    var cardSub = CGRect.zero
+    var cardChip = CGRect.zero
+    var cardHint = CGRect.zero
+    var podIconBig = CGRect.zero
+    var podCardKick = CGRect.zero
+    var podCardName = CGRect.zero
+    var podModeChip = CGRect.zero
+    var podHint = CGRect.zero
+    var authBig = CGRect.zero
+    var authTitle = CGRect.zero
+    var authSub = CGRect.zero
+    var cardL: CGFloat = 0
+    var cardT: CGFloat = 0
 }
 
 func ComputeLayout(cL: CGFloat, cT: CGFloat, cR: CGFloat, cB: CGFloat, tRaw: CGFloat) -> Lay {
@@ -86,6 +113,35 @@ func ComputeLayout(cL: CGFloat, cT: CGFloat, cR: CGFloat, cB: CGFloat, tRaw: CGF
     l.calNext = CGRect(x: cL + 196 * S, y: cT + 17 * S, width: (cR - 22 * S) - (cL + 196 * S), height: 14 * S)
     l.calStatus1 = CGRect(x: cL + 22 * S, y: cT + 96 * S, width: (cR - 22 * S) - (cL + 22 * S), height: 16 * S)
     l.calStatus2 = CGRect(x: cL + 22 * S, y: cT + 112 * S, width: (cR - 22 * S) - (cL + 22 * S), height: 16 * S)
+
+    l.batIcon = CGRect(x: cL + 18 * S, y: cT + 9 * S, width: 26 * S, height: 19 * S)
+    l.batTitle = CGRect(x: cL + 52 * S, y: cT + 2 * S, width: 112 * S, height: 33 * S)
+    l.batPct = CGRect(x: cR - 74 * S, y: cT + 2 * S, width: 58 * S, height: 33 * S)
+    l.podIcon = CGRect(x: cL + 14 * S, y: cT + 7 * S, width: 26 * S, height: 23 * S)
+    l.podLabel = CGRect(x: cL + 48 * S, y: cT + 3 * S, width: (cR - 74 * S) - (cL + 48 * S), height: 14 * S)
+    l.podName = CGRect(x: cL + 48 * S, y: cT + 15 * S, width: (cR - 74 * S) - (cL + 48 * S), height: 20 * S)
+    l.podRing = CGPoint(x: cR - 36 * S, y: l.ringY)
+    l.podRingR = 15 * S
+    l.authIcon = CGRect(x: cL + 18 * S, y: cT + 8.5 * S, width: 21 * S, height: 21 * S)
+    l.authLabel = CGRect(x: cL + 48 * S, y: cT, width: (cR - 16 * S) - (cL + 48 * S), height: 37 * S)
+
+    l.cardL = cL
+    l.cardT = cT
+    l.ringC = CGPoint(x: cL + 92 * S, y: cT + 100 * S)
+    l.ringR = 40 * S
+    l.cardKick = CGRect(x: cL + 172 * S, y: cT + 30 * S, width: (cR - 26 * S) - (cL + 172 * S), height: 14 * S)
+    l.cardTitle = CGRect(x: cL + 172 * S, y: cT + 44 * S, width: (cR - 26 * S) - (cL + 172 * S), height: 28 * S)
+    l.cardSub = CGRect(x: cL + 172 * S, y: cT + 74 * S, width: (cR - 24 * S) - (cL + 172 * S), height: 18 * S)
+    l.cardChip = CGRect(x: cL + 172 * S, y: cT + 102 * S, width: 164 * S, height: 30 * S)
+    l.cardHint = CGRect(x: cL + 172 * S, y: cT + 148 * S, width: (cR - 24 * S) - (cL + 172 * S), height: 18 * S)
+    l.podIconBig = CGRect(x: cL + 34 * S, y: cT + 34 * S, width: 54 * S, height: 46 * S)
+    l.podCardKick = CGRect(x: cL + 24 * S, y: cT + 88 * S, width: 150 * S, height: 14 * S)
+    l.podCardName = CGRect(x: cL + 24 * S, y: cT + 102 * S, width: 148 * S, height: 28 * S)
+    l.podModeChip = CGRect(x: cL + 24 * S, y: cT + 136 * S, width: 152 * S, height: 26 * S)
+    l.podHint = CGRect(x: cL + 24 * S, y: cT + 166 * S, width: 150 * S, height: 16 * S)
+    l.authBig = CGRect(x: cx - 34 * S, y: cT + 30 * S, width: 68 * S, height: 68 * S)
+    l.authTitle = CGRect(x: cL + 20 * S, y: cT + 118 * S, width: (cR - 20 * S) - (cL + 20 * S), height: 26 * S)
+    l.authSub = CGRect(x: cL + 20 * S, y: cT + 146 * S, width: (cR - 20 * S) - (cL + 20 * S), height: 18 * S)
     return l
 }
 
@@ -137,6 +193,19 @@ final class Island {
     var volShown: CGFloat = 0.5
     var waveAmt: [CGFloat] = [1, 1, 0]
     var muteAmt: CGFloat = 0
+    var aBat = Spring()
+    var aPods = Spring()
+    var aAuth = Spring()
+    var aPerm = Spring()
+    var vCard: CGFloat = 0
+    var card: AlertKind? = nil
+    var battery = BatteryState()
+    var pods = PodsState()
+    var authOK = false
+    var authRunning = false
+    var authLabel = ""
+    var authStart: Double = -10
+    var batteryThreshold = 100
     var silentState = false
     var silentKnown = false
     var glowW: CGFloat = 0
@@ -198,6 +267,10 @@ final class Island {
         aVolS.cfg(0.34, 0.7)
         bellSlide.cfg(0.42, 0.8)
         slashT.cfg(0.357, 0.9)
+        aBat.cfg(0.30, 0.80)
+        aPods.cfg(0.30, 0.80)
+        aAuth.cfg(0.30, 0.80)
+        aPerm.cfg(0.30, 0.80)
     }
 
     func bootstrap() {
@@ -208,6 +281,10 @@ final class Island {
         sL.snap(0)
         sR.snap(0)
         sB.snap(0)
+        aBat.snap(0)
+        aPods.snap(0)
+        aAuth.snap(0)
+        aPerm.snap(0)
         pointer = CGPoint(x: -9999, y: -9999)
         update(0.016)
     }
@@ -219,7 +296,16 @@ final class Island {
         case .ring: return 186
         case .silent: return 214
         case .volume: return 206
+        case .battery: return 252
+        case .pods: return 312
+        case .auth: return 238
+        case .permission: return 282
         }
+    }
+
+    func featureAlertActive() -> Bool {
+        guard time < alertUntil else { return false }
+        return alertKind == .battery || alertKind == .pods || alertKind == .auth || alertKind == .permission
     }
 
     func applyMode(_ m: Mode) {
@@ -248,6 +334,54 @@ final class Island {
         if kind != alertKind || time >= alertUntil { alertStart = time }
         alertKind = kind
         alertUntil = time + duration
+        switch kind {
+        case .battery, .pods, .auth, .permission: card = kind
+        default: card = nil
+        }
+    }
+
+    func pollBattery() {
+        battery = BatteryMonitor.shared.state
+        guard battery.present, !battery.charging else { batteryThreshold = 100; return }
+        if battery.percent > 22 { batteryThreshold = 100 }
+        for th in [20, 10, 5] where battery.percent <= th && batteryThreshold > th {
+            batteryThreshold = th
+            triggerAlert(.battery, 10)
+            return
+        }
+    }
+
+    func podsChanged(_ s: PodsState) {
+        pods = s
+        guard s.connected || !s.name.isEmpty else { return }
+        triggerAlert(.pods, s.connected ? 6.0 : 4.5)
+    }
+
+    func podsModeChanged() {
+        pods = AirPodsMonitor.shared.state
+    }
+
+    func beginAuth() {
+        authRunning = true
+        authOK = false
+        authLabel = "Authenticating"
+        authStart = time
+        triggerAlert(.auth, 60)
+    }
+
+    func finishAuth(_ ok: Bool, _ label: String) {
+        authRunning = false
+        authOK = ok
+        authLabel = label
+        triggerAlert(.auth, 3.4)
+    }
+
+    func showPermission(_ ok: Bool) {
+        authRunning = false
+        authOK = ok
+        authLabel = ok ? "Calendar Access Granted" : "Calendar Access Denied"
+        authStart = time
+        triggerAlert(.permission, 4.0)
     }
 
     func pullMedia() {
@@ -377,12 +511,13 @@ final class Island {
             v += (target - v) * (1 - exp(-rate * CGFloat(dt)))
         }
 
-        let showMedia = !searchMode && ((mode == .compact && has) || mode == .expanded)
+        let showMedia = card == nil && !searchMode && ((mode == .compact && has) || mode == .expanded)
         sm(&vMedia, showMedia ? 1 : 0, 14, 30)
-        sm(&vText, (expanded && !searchMode) ? 1 : 0, 14, 34)
+        sm(&vText, (expanded && !searchMode && card == nil) ? 1 : 0, 14, 34)
         sm(&vSearch, (expanded && searchMode) ? 1 : 0, 14, 34)
         sm(&vAlert, mode == .alert ? 1 : 0, 16, 24)
-        sm(&vCal, (!has && !searchMode) ? 1 : 0, 10, 14)
+        sm(&vCal, (!has && !searchMode && card == nil) ? 1 : 0, 10, 14)
+        sm(&vCard, (expanded && card != nil && !searchMode) ? 1 : 0, 12, 26)
         sm(&playT, playingNow ? 1 : 0, 10, 10)
         sm(&artFade, 1, 6, 6)
         sm(&barGrow, seeking ? 1 : 0, 18, 18)
@@ -391,9 +526,19 @@ final class Island {
         aRing.target = (mode == .alert && alertKind == .ring) ? 1 : 0
         aSilent.target = (mode == .alert && alertKind == .silent) ? 1 : 0
         aVolS.target = (mode == .alert && alertKind == .volume) ? 1 : 0
+        aBat.target = (mode == .alert && alertKind == .battery) ? 1 : 0
+        aPods.target = (mode == .alert && alertKind == .pods) ? 1 : 0
+        aAuth.target = (mode == .alert && alertKind == .auth) ? 1 : 0
+        aPerm.target = (mode == .alert && alertKind == .permission) ? 1 : 0
         aRing.step(dt)
         aSilent.step(dt)
         aVolS.step(dt)
+        aBat.step(dt)
+        aPods.step(dt)
+        aAuth.step(dt)
+        aPerm.step(dt)
+
+        if !expanded && card != nil && time > alertUntil + 0.9 { card = nil }
 
         if mode == .alert && alertKind != .volume {
             let silentNow = (alertKind == .silent)
@@ -464,6 +609,9 @@ final class Island {
             || abs(playT - (playingNow ? 1 : 0)) > 0.01
             || expanded || hoverT > 0 || time < alertUntil
             || aRing.moving || aSilent.moving || aVolS.moving
+            || aBat.moving || aPods.moving || aAuth.moving || aPerm.moving
+            || abs(vCard - ((expanded && card != nil && !searchMode) ? 1 : 0)) > 0.01
+            || (authRunning && card == .auth)
             || bellSlide.moving || slashT.moving
             || glowR > 0.01 || glowW > 0.01 || blur > 0.15
     }
@@ -489,7 +637,7 @@ final class Island {
         lastVolRemote = vc.volume
         if silentKnown && silentNow != silentState {
             triggerAlert(silentNow ? .silent : .ring, 2.4)
-        } else if changed && !silentNow && time > volHoldUntil && !alertShowsSilenceOrRing() {
+        } else if changed && !silentNow && time > volHoldUntil && !alertShowsSilenceOrRing() && !featureAlertActive() {
             triggerAlert(.volume, 1.6)
         }
         silentState = silentNow
@@ -505,7 +653,7 @@ final class Island {
         let silentNow = VolumeControl.shared.muted || v <= 0.005
         if silentKnown && silentNow != silentState {
             triggerAlert(silentNow ? .silent : .ring, 2.4)
-        } else if !expanded && !silentNow && !alertShowsSilenceOrRing() {
+        } else if !expanded && !silentNow && !alertShowsSilenceOrRing() && !featureAlertActive() {
             triggerAlert(.volume, 1.6)
         }
         silentState = silentNow
@@ -533,6 +681,12 @@ final class Island {
         let x = (px - tx) / sx
         let y = (py - ty) / sy
         if !expanded || ex.x < 0.75 { return .body }
+        if let c = card {
+            if c == .pods && l.podModeChip.contains(CGPoint(x: x, y: y)) { return .podmode }
+            if c == .battery && l.cardHint.contains(CGPoint(x: x, y: y)) { return .settings }
+            if c == .pods && l.podHint.contains(CGPoint(x: x, y: y)) { return .settings }
+            return .body
+        }
         if searchMode {
             if l.bSpot.contains(CGPoint(x: x, y: y)) { return .spot }
             if l.bYt.contains(CGPoint(x: x, y: y)) { return .yt }
@@ -652,8 +806,21 @@ final class Island {
         case .srch: enterSearch()
         case .spot: doSearch(youtube: false)
         case .yt: doSearch(youtube: true)
+        case .podmode: AirPodsMonitor.shared.cycleMode()
+        case .settings: openSettings()
         default: break
         }
+    }
+
+    func openSettings() {
+        let batteryURL = "x-apple.systempreferences:com.apple.Battery-Settings.extension"
+        let batteryOld = "x-apple.systempreferences:com.apple.preference.battery"
+        let btURL = "x-apple.systempreferences:com.apple.Bluetooth-Settings.extension"
+        let btOld = "x-apple.systempreferences:com.apple.preference.bluetooth"
+        let first = card == .battery ? batteryURL : btURL
+        let second = card == .battery ? batteryOld : btOld
+        if let u = URL(string: first), NSWorkspace.shared.open(u) { return }
+        if let u = URL(string: second) { NSWorkspace.shared.open(u) }
     }
 
     func enterSearch() {
