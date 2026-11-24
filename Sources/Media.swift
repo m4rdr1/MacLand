@@ -159,7 +159,7 @@ final class NowPlaying {
         st.pos = pos
         st.dur = dur
         st.stamp = Date()
-        if rate != 0 { st.playing = playing }
+        if d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] != nil { st.playing = playing }
 
         if key != lastKey {
             lastKey = key
@@ -227,30 +227,57 @@ final class VolumeControl {
             elem = 1
             volume = v
         }
-        if let m = getU32(d, kAudioDevicePropertyMute, elem) {
-            muted = m != 0
-        } else if let m = getU32(d, kAudioDevicePropertyMute, 1) {
+        if let e = elements(d, kAudioDevicePropertyMute).first, let m = getU32(d, kAudioDevicePropertyMute, e) {
             muted = m != 0
         }
         known = true
     }
 
+    private func elements(_ d: AudioDeviceID, _ sel: AudioObjectPropertySelector) -> [AudioObjectPropertyElement] {
+        var out: [AudioObjectPropertyElement] = []
+        for e in AudioObjectPropertyElement(0)...AudioObjectPropertyElement(8) {
+            var a = Self.address(sel, kAudioObjectPropertyScopeOutput, e)
+            if AudioObjectHasProperty(d, &a) { out.append(e) }
+        }
+        return out
+    }
+
     func setVolume(_ v: Float) {
         if dev == 0 { refresh() }
         guard dev != 0 else { return }
-        var val = min(max(v, 0), 1)
-        var a = Self.address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, elem)
-        AudioObjectSetPropertyData(dev, &a, 0, nil, UInt32(MemoryLayout<Float32>.size), &val)
+        let val = min(max(v, 0), 1)
+        let se = elements(dev, kAudioDevicePropertyVolumeScalar)
+        for e in se {
+            var a = Self.address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e)
+            var x = val
+            AudioObjectSetPropertyData(dev, &a, 0, nil, UInt32(MemoryLayout<Float32>.size), &x)
+        }
+        if val > 0.005 {
+            for e in elements(dev, kAudioDevicePropertyMute) {
+                var a = Self.address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, e)
+                var m: UInt32 = 0
+                AudioObjectSetPropertyData(dev, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &m)
+            }
+            muted = false
+        }
+        if let e = se.first { elem = e }
         volume = val
     }
 
     func toggleMute() {
         if dev == 0 { refresh() }
         guard dev != 0 else { return }
-        var m: UInt32 = muted ? 0 : 1
-        var a = Self.address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, elem)
-        AudioObjectSetPropertyData(dev, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &m)
-        muted = m != 0
+        let es = elements(dev, kAudioDevicePropertyMute)
+        guard let first = es.first else { return }
+        var current: UInt32 = muted ? 1 : 0
+        if let m = getU32(dev, kAudioDevicePropertyMute, first) { current = m }
+        muted = current == 0
+        let target: UInt32 = muted ? 1 : 0
+        for e in es {
+            var a = Self.address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, e)
+            var m = target
+            AudioObjectSetPropertyData(dev, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &m)
+        }
     }
 
     private func getFloat(_ d: AudioDeviceID, _ sel: AudioObjectPropertySelector,
