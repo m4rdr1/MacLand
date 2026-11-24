@@ -166,6 +166,7 @@ final class Island {
     var seekHoldUntil: Double = 0
     var seekPos: Double = 0
     var overridePlay = false
+    var overridePlayMin: Double = 0
     var overridePlayUntil: Double = 0
     var playingNow = false
     var volHoldUntil: Double = 0
@@ -325,7 +326,10 @@ final class Island {
         time += dt
         pullMedia()
 
-        let playing = time < overridePlayUntil ? overridePlay : mPlaying
+        if overridePlayUntil > 0 && time >= overridePlayMin && (mPlaying == overridePlay || time >= overridePlayUntil) {
+            overridePlayUntil = 0
+        }
+        let playing = overridePlayUntil > 0 ? overridePlay : mPlaying
         playingNow = playing && has
         if playingNow { lastActive = time }
 
@@ -473,15 +477,19 @@ final class Island {
         return 0
     }
 
+    func alertShowsSilenceOrRing() -> Bool {
+        return (alertKind == .silent || alertKind == .ring) && time < alertUntil
+    }
+
     func pollVolume() {
         VolumeControl.shared.refresh()
         let vc = VolumeControl.shared
         let silentNow = vc.muted || vc.volume <= 0.005
         let changed = lastVolRemote >= 0 && abs(vc.volume - lastVolRemote) > 0.004
-        if lastVolRemote >= 0 { lastVolRemote = vc.volume }
+        lastVolRemote = vc.volume
         if silentKnown && silentNow != silentState {
             triggerAlert(silentNow ? .silent : .ring, 2.4)
-        } else if changed && !silentNow && time > volHoldUntil {
+        } else if changed && !silentNow && time > volHoldUntil && !alertShowsSilenceOrRing() {
             triggerAlert(.volume, 1.6)
         }
         silentState = silentNow
@@ -497,16 +505,17 @@ final class Island {
         let silentNow = VolumeControl.shared.muted || v <= 0.005
         if silentKnown && silentNow != silentState {
             triggerAlert(silentNow ? .silent : .ring, 2.4)
-        } else if !expanded && !silentNow {
+        } else if !expanded && !silentNow && !alertShowsSilenceOrRing() {
             triggerAlert(.volume, 1.6)
         }
         silentState = silentNow
         silentKnown = true
     }
 
-    func scroll(_ dy: CGFloat) {
+    func scroll(_ dy: CGFloat, _ precise: Bool) {
         guard dy != 0 else { return }
-        setVolume(VolumeControl.shared.volume + Float(dy) * 0.01)
+        let step: Float = precise ? 0.006 : 0.04
+        setVolume(VolumeControl.shared.volume + Float(dy) * step)
     }
 
     func containsPoint(_ p: CGPoint) -> Bool {
@@ -632,7 +641,8 @@ final class Island {
         switch h {
         case .play:
             overridePlay = !playingNow
-            overridePlayUntil = time + 0.8
+            overridePlayMin = time + 0.45
+            overridePlayUntil = time + 4.0
             NowPlaying.shared.togglePlay()
         case .next: NowPlaying.shared.next()
         case .prev: NowPlaying.shared.prev()
