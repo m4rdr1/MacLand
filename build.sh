@@ -10,7 +10,8 @@ swiftc -swift-version 5 -O \
     -target "$(uname -m)-apple-macos12.0" \
     -o "$APP/Contents/MacOS/MacLand" \
     Sources/*.swift \
-    -framework AppKit -framework CoreText -framework CoreAudio -framework EventKit -framework ImageIO
+    -framework AppKit -framework CoreText -framework CoreAudio -framework EventKit -framework ImageIO \
+    -framework IOKit -framework LocalAuthentication
 
 clang -dynamiclib -O2 -fblocks \
     -target "$(uname -m)-apple-macos12.0" \
