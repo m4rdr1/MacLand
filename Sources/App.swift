@@ -39,6 +39,9 @@ final class IslandView: NSView {
         m.addItem(withTitle: "Preview “Ring” alert", action: #selector(previewRing), keyEquivalent: "").target = self
         m.addItem(withTitle: "Preview “Silent” alert", action: #selector(previewSilent), keyEquivalent: "").target = self
         m.addItem(withTitle: "Preview volume pill", action: #selector(previewVolume), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Preview battery warning", action: #selector(previewBattery), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Preview AirPods connection", action: #selector(previewPods), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Authenticate with Touch ID", action: #selector(runAuth), keyEquivalent: "").target = self
         m.addItem(.separator())
         m.addItem(withTitle: "Quit MacLand", action: #selector(quitApp), keyEquivalent: "q").target = self
         NSMenu.popUpContextMenu(m, with: event, for: self)
@@ -56,6 +59,24 @@ final class IslandView: NSView {
     @objc private func previewRing() { Island.shared.triggerAlert(.ring, 2.4) }
     @objc private func previewSilent() { Island.shared.triggerAlert(.silent, 2.4) }
     @objc private func previewVolume() { Island.shared.triggerAlert(.volume, 2.0) }
+    @objc private func previewBattery() {
+        var b = Island.shared.battery
+        if !b.present { b.present = true; b.percent = 14; b.minutes = 74 }
+        Island.shared.battery = b
+        Island.shared.triggerAlert(.battery, 10)
+    }
+    @objc private func previewPods() {
+        var s = PodsState()
+        s.connected = true
+        s.name = "Shea's AirPods"
+        s.left = 75
+        s.right = 70
+        s.caseLevel = 45
+        s.listening = 2
+        Island.shared.pods = s
+        Island.shared.triggerAlert(.pods, 7)
+    }
+    @objc private func runAuth() { AuthService.shared.authenticate() }
     @objc private func quitApp() { NSApp.terminate(nil) }
 }
 
@@ -71,6 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NowPlaying.shared.start()
         CalendarService.shared.start()
+        BatteryMonitor.shared.start()
+        AirPodsMonitor.shared.start()
+        AuthService.shared.start()
 
         let island = Island.shared
         island.bootstrap()
@@ -161,6 +185,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(withTitle: "Preview “Ring” alert", action: #selector(menuRing), keyEquivalent: "").target = self
         m.addItem(withTitle: "Preview “Silent” alert", action: #selector(menuSilent), keyEquivalent: "").target = self
         m.addItem(withTitle: "Preview volume pill", action: #selector(menuVolume), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Preview battery warning", action: #selector(menuBattery), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Preview AirPods connection", action: #selector(menuPods), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Authenticate with Touch ID", action: #selector(menuAuth), keyEquivalent: "").target = self
         m.addItem(.separator())
         m.addItem(withTitle: "Quit MacLand", action: #selector(menuQuit), keyEquivalent: "q").target = self
         statusItem?.menu = m
@@ -169,6 +196,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuRing() { Island.shared.triggerAlert(.ring, 2.4) }
     @objc private func menuSilent() { Island.shared.triggerAlert(.silent, 2.4) }
     @objc private func menuVolume() { Island.shared.triggerAlert(.volume, 2.0) }
+    @objc private func menuBattery() {
+        var b = Island.shared.battery
+        if !b.present { b.present = true; b.percent = 14; b.minutes = 74 }
+        Island.shared.battery = b
+        Island.shared.triggerAlert(.battery, 10)
+    }
+    @objc private func menuPods() {
+        var s = PodsState()
+        s.connected = true
+        s.name = "Shea's AirPods"
+        s.left = 75
+        s.right = 70
+        s.caseLevel = 45
+        s.listening = 2
+        Island.shared.pods = s
+        Island.shared.triggerAlert(.pods, 7)
+    }
+    @objc private func menuAuth() { AuthService.shared.authenticate() }
     @objc private func menuQuit() { NSApp.terminate(nil) }
 }
 
@@ -176,6 +221,49 @@ enum Snapshot {
     static func render(path: String) {
         CalendarService.shared.refreshNow()
         Island.shared.snapshotSetup()
+        output(path)
+    }
+
+    static func renderBattery(path: String) {
+        let I = Island.shared
+        I.snapshotSetup()
+        var b = BatteryState()
+        b.present = true
+        b.percent = 14
+        b.minutes = 74
+        I.battery = b
+        I.card = .battery
+        I.vCard = 1
+        I.vCal = 0
+        output(path)
+    }
+
+    static func renderPods(path: String) {
+        let I = Island.shared
+        I.snapshotSetup()
+        var s = PodsState()
+        s.connected = true
+        s.name = "Shea's AirPods"
+        s.left = 75
+        s.right = 70
+        s.caseLevel = 45
+        s.listening = 2
+        I.pods = s
+        I.card = .pods
+        I.vCard = 1
+        I.vCal = 0
+        output(path)
+    }
+
+    static func renderAuth(path: String) {
+        let I = Island.shared
+        I.snapshotSetup()
+        I.card = .auth
+        I.authRunning = true
+        I.authLabel = "Authenticating"
+        I.authStart = I.time - 0.7
+        I.vCard = 1
+        I.vCal = 0
         output(path)
     }
 
